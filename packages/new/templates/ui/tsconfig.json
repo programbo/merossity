@@ -1,0 +1,9 @@
+{
+  "extends": "@bun-monorepo-template/qa/tsconfig/react-lib",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}

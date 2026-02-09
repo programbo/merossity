@@ -1,0 +1,23 @@
+{
+  "name": "@bun-monorepo-template/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./string": "./src/string/index.ts",
+    "./date": "./src/date/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint --config oxlint.json --fix .",
+    "format": "prettier --config prettier.config.cjs --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "build": "bunup"
+  },
+  "devDependencies": {
+    "@bun-monorepo-template/qa": "workspace:*",
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "bunup": "latest"
+  }
+}

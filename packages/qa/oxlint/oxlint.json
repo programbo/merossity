@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "warn",
+    "suspicious": "warn",
+    "style": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "no-ternary": "off",
+    "sort-imports": "off"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.*", "**/*.spec.*"],
+      "rules": {
+        "no-unused-vars": "off"
+      }
+    }
+  ]
+}

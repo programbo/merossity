@@ -1,0 +1,52 @@
+{
+  "name": "ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "./src/index.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./radio": {
+      "types": "./dist/radio.d.ts",
+      "import": "./dist/radio.js",
+      "require": "./dist/radio.cjs"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
+    },
+    "./index.css": "./src/index.css"
+  },
+  "files": [
+    "dist",
+    "src/index.css"
+  ],
+  "scripts": {
+    "dev": "bunup --watch",
+    "build": "bunup",
+    "postinstall": "bun run scripts/postinstall.ts"
+  },
+  "dependencies": {
+    "tailwind-merge": "^3.4.0",
+    "tailwind-variants": "^3.2.2"
+  },
+  "peerDependencies": {
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "@types/node": "^25.2.0",
+    "@types/react": "^19.2.11",
+    "bunup": "^0.16.22",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}

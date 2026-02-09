@@ -1,0 +1,27 @@
+{
+  "name": "merossity",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "bun run scripts/postinstall.ts",
+    "dev": "bun run --parallel --workspaces --if-present dev",
+    "build": "bun run --workspaces --if-present build",
+    "lint": "bun run --workspaces --if-present lint",
+    "typecheck": "bun run --workspaces --if-present typecheck",
+    "format": "bun run --workspaces --if-present format",
+    "qa": "bun run lint && bun run typecheck && bun run format",
+    "new": "bun run packages/new/index.ts"
+  },
+  "devDependencies": {
+    "@bun-monorepo-template/qa": "workspace:*",
+    "@trivago/prettier-plugin-sort-imports": "latest",
+    "concurrently": "latest",
+    "oxlint": "latest",
+    "prettier": "latest",
+    "prettier-plugin-tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": ["@bun-monorepo-template/qa/oxlint"]
+}

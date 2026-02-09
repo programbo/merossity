@@ -1,0 +1,3 @@
+{
+  "extends": "@bun-monorepo-template/qa/tsconfig/node"
+}

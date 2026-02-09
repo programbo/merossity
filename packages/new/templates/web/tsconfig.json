@@ -1,0 +1,10 @@
+{
+  "extends": "@bun-monorepo-template/qa/tsconfig/web",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "exclude": ["dist", "node_modules"]
+}

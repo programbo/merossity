@@ -1,0 +1,10 @@
+{
+  "extends": "@bun-monorepo-template/qa/tsconfig/node",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}

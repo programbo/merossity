@@ -1,0 +1,9 @@
+{
+  "extends": "@bun-monorepo-template/qa/tsconfig/node",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}
