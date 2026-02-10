@@ -5,6 +5,9 @@ Shared QA config for the monorepo (Prettier, Oxlint, TypeScript).
 ## TL;DR
 
 ```bash
+bun run qa
+
+# Initialize QA wiring for a workspace
 bun run --cwd packages/qa qa:init --dir apps/web --kind web --tailwind
 bun run --cwd packages/qa qa:init --dir packages/cli --kind cli
 bun run --cwd packages/qa qa:init --dir packages/lib --kind lib

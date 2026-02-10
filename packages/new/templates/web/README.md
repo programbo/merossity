@@ -1,11 +1,18 @@
 # web
 
-Bun React + Tailwind app.
+Bun React + Tailwind app template (used by `@merossity/new`).
 
 ## Dev
 
 ```bash
 bun dev
+```
+
+## Production
+
+```bash
+bun run build
+bun start
 ```
 
 ## Ports
@@ -29,6 +36,8 @@ printf restart | nc -U .web-3000.sock
 When running in a TTY, you can also press `r` to restart or `q` to stop.
 
 ## QA
+
+If you're using this template inside the Merossity monorepo:
 
 ```bash
 bun run --cwd packages/qa qa:init --dir . --kind web --tailwind

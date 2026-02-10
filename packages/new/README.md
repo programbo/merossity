@@ -5,6 +5,10 @@ Scaffold apps and packages with consistent defaults.
 ## TL;DR
 
 ```bash
+# From repo root (recommended)
+bun run new web my-app
+
+# Or call the package directly
 bun run @merossity/new web my-app
 bun run @merossity/new api my-api
 bun run @merossity/new cli my-cli

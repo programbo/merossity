@@ -1,54 +1,77 @@
-# Bun Monorepo Template
+# Merossity
 
-This repo exists to give you a fast, batteries‑included Bun workspace with a production‑ready React + Tailwind web app, plus opinionated scaffolding and QA tooling so every @merossity/new package starts clean.
+Merossity is a small web app plus a CLI for interacting with Meross devices: store cloud credentials locally, inspect your device inventory, resolve LAN hosts, and toggle devices on your network.
 
-Use it directly with `bun create`:
+## Web App (apps/web)
 
-```bash
-bun create programbo/bun-monorepo <PROJECT_NAME>
-```
+**What it does**
 
-**Quick Start**
+- Cloud login (supports MFA/TOTP) and device inventory refresh
+- Local-first config storage at `~/.config/merossity/config.json` (override with `MEROSS_CONFIG_PATH`)
+- LAN host resolution by MAC address (optional CIDR ping-sweep to populate neighbor tables)
+- LAN control: `Appliance.System.All` and `Appliance.Control.ToggleX`
+
+**Start it**
 
 ```bash
 bun install
-bun --cwd apps/web dev
+bun run --cwd apps/web dev
 ```
 
-Then open `http://localhost:3000/`.
+Open `http://localhost:3000` (if `3000` is taken, the server will increment until it finds a free port).
 
-**Highlights**
+**Configuration**
 
-- **Default `web` app**: React + Tailwind, Bun dev server, hot reload, and a health‑checked startup with smart port handling.
-- **Seamless dev server takeover**: If a matching app is already running on the default port, the @merossity/new process gracefully stops it and takes over without manual cleanup.
-- **`packages/new`**: Scaffolds apps and packages with the repo’s QA defaults baked in.  
-  Run: `bun run @merossity/new <web|api|cli|lib|ui>`
-- **`packages/qa`**: Shared lint/format/typecheck configs and scripts used by every workspace.  
-  Run: `bun run qa`
+- `MEROSS_EMAIL`, `MEROSS_PASSWORD`: optional defaults for cloud login (can also enter in the UI)
+- `MEROSS_KEY`: optional fallback for LAN control if you do not log in via cloud
+- `MEROSS_CONFIG_PATH`: override config location (default `~/.config/merossity/config.json`)
+- `PORT`, `PORT_OFFSET`: dev server port controls
 
-**Common Commands**
+Note: `apps/web` will try to load a `.env` from the repo root automatically, even when you run the server from `apps/web`.
+
+## CLI (packages/cli)
+
+The CLI is designed to run directly from source (no build step required).
+
+**Easy start**
 
 ```bash
-# Run all workspace dev servers (if present)
-bun run dev
+# show help (does not start the TUI)
+bun run --cwd packages/cli src/index.ts --help
 
-# Build the web app
-bun --cwd apps/web run build
-
-# Run the web app in production mode
-bun --cwd apps/web run start
+# run a simple command
+bun run --cwd packages/cli src/index.ts greet bun
 ```
 
-**Environment Variables**
+**TUI**
 
-Server control for the `web` app (development only):
+Running the CLI with no command starts the Ink TUI:
 
-- `PORT`: Base port for the dev server (default `3000`).
-- `PORT_OFFSET`: Adds an offset to `PORT` (handy when running multiple instances).
-- `NODE_ENV`: Set to `production` to disable dev features in `apps/web`. Server controls are intended for non‑production use only.
+```bash
+bun run --cwd packages/cli src/index.ts
+```
 
-**Repo Defaults**
+The TUI expects a Meross cloud dump JSON at `~/.config/merossity/meross-cloud-dump.json` (override with `MEROSS_DUMP`).
 
-- Root lint config lives in `oxlint.json`.
-- Formatting uses `prettier.config.cjs`.
-- The `@merossity/new` scaffolder injects QA defaults into generated workspaces.
+**Meross LAN commands**
+
+```bash
+# Toggle on/off via LAN (/config). Provide exactly one of --on/--off.
+MEROSS_KEY="..." bun run --cwd packages/cli src/index.ts meross:togglex --host 192.168.1.42 --on
+
+# If you only have a MAC, attempt to resolve IP via neighbor tables; optionally sweep a CIDR first.
+MEROSS_KEY="..." bun run --cwd packages/cli src/index.ts meross:togglex --mac aa:bb:cc:dd:ee:ff --sweep --subnet 192.168.1.0/24 --off
+
+# Fetch Appliance.System.All
+MEROSS_KEY="..." bun run --cwd packages/cli src/index.ts meross:systemall --host 192.168.1.42
+```
+
+## Repo Commands
+
+```bash
+# Run lint + typecheck + format across workspaces
+bun run qa
+
+# Build all workspaces (if present)
+bun run build
+```
