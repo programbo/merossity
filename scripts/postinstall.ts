@@ -79,11 +79,11 @@ const main = async () => {
   const corePkg = existsSync(corePkgPath) ? await readJson<Record<string, unknown>>(corePkgPath) : {}
   const newPkg = existsSync(newPkgPath) ? await readJson<Record<string, unknown>>(newPkgPath) : {}
 
-  const oldQaName = resolveScopedName(qaPkg.name, '@bun-monorepo-template/qa')
+  const oldQaName = resolveScopedName(qaPkg.name, '@merossity/qa')
   const newQaName = `@${projectName}/qa`
-  const oldCoreName = resolveScopedName(corePkg.name, '@bun-monorepo-template/core')
+  const oldCoreName = resolveScopedName(corePkg.name, '@merossity/core')
   const newCoreName = `@${projectName}/core`
-  const oldNewName = resolveScopedName(newPkg.name, '@bun-monorepo-template/new')
+  const oldNewName = resolveScopedName(newPkg.name, '@merossity/new')
   const newNewName = `@${projectName}/new`
 
   await updatePackageName(rootPkgPath, projectName)

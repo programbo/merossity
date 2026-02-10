@@ -1,1 +1,1 @@
-module.exports = require("@bun-monorepo-template/qa/prettier");
+module.exports = require("@merossity/qa/prettier");

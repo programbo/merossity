@@ -247,7 +247,7 @@ const ensureOxlintConfig = async (dir: string, force: boolean) => {
   if (!existsSync(configPath) || force) {
     const contents = `{
   "$schema": "../../node_modules/oxlint/configuration_schema.json",
-  "extends": ["@bun-monorepo-template/qa/oxlint"]
+  "extends": ["@merossity/qa/oxlint"]
 }\n`
     await writeFile(configPath, contents, 'utf8')
   } else {
@@ -257,17 +257,17 @@ const ensureOxlintConfig = async (dir: string, force: boolean) => {
 
 const resolveTsconfigPreset = (kind: Exclude<Kind, 'auto'>, pkg: Record<string, unknown>) => {
   if (kind === 'web') {
-    return '@bun-monorepo-template/qa/tsconfig/web'
+    return '@merossity/qa/tsconfig/web'
   }
   // CLI packages may use React (e.g. Ink) but still want "node" defaults (no DOM libs).
   if (kind === 'cli') {
-    return '@bun-monorepo-template/qa/tsconfig/node'
+    return '@merossity/qa/tsconfig/node'
   }
   const isReact = detectReact(pkg)
   if (isReact) {
-    return '@bun-monorepo-template/qa/tsconfig/react-lib'
+    return '@merossity/qa/tsconfig/react-lib'
   }
-  return '@bun-monorepo-template/qa/tsconfig/node'
+  return '@merossity/qa/tsconfig/node'
 }
 
 interface TsconfigOptions {
@@ -343,7 +343,7 @@ const applyQaScripts = (scripts: Record<string, string>, kind: Exclude<Kind, 'au
 }
 
 const applyQaDevDependencies = (devDependencies: Record<string, string>, kind: Exclude<Kind, 'auto'>) => {
-  devDependencies['@bun-monorepo-template/qa'] = 'workspace:*'
+  devDependencies['@merossity/qa'] = 'workspace:*'
   if (kind !== 'web') {
     devDependencies.bunup = 'latest'
   }
@@ -363,9 +363,9 @@ const writePackageJson = async ({ dir, pkg, scripts, devDependencies }: PackageJ
 }
 
 const resolvePrettierTarget = (tailwind: boolean) => {
-  let target = '@bun-monorepo-template/qa/prettier'
+  let target = '@merossity/qa/prettier'
   if (tailwind) {
-    target = '@bun-monorepo-template/qa/prettier-tailwind'
+    target = '@merossity/qa/prettier-tailwind'
   }
   return target
 }
@@ -374,8 +374,8 @@ const updateOxlintConfig = async (configPath: string) => {
   const config = await readJson<Record<string, unknown>>(configPath)
   const extendsField = coerceExtendsField(config.extends)
 
-  if (!extendsField.includes('@bun-monorepo-template/qa/oxlint')) {
-    extendsField.push('@bun-monorepo-template/qa/oxlint')
+  if (!extendsField.includes('@merossity/qa/oxlint')) {
+    extendsField.push('@merossity/qa/oxlint')
   }
 
   config.$schema = '../../node_modules/oxlint/configuration_schema.json'

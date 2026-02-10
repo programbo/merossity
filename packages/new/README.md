@@ -1,15 +1,19 @@
-# @bun-monorepo-template/new
+# @merossity/new
 
 Scaffold apps and packages with consistent defaults.
 
 ## TL;DR
 
 ```bash
-bun run @bun-monorepo-template/new web my-app
-bun run @bun-monorepo-template/new api my-api
-bun run @bun-monorepo-template/new cli my-cli
-bun run @bun-monorepo-template/new lib my-lib
-bun run @bun-monorepo-template/new ui packages/neon-ui-2026
+# From repo root (recommended)
+bun run new web my-app
+
+# Or call the package directly
+bun run @merossity/new web my-app
+bun run @merossity/new api my-api
+bun run @merossity/new cli my-cli
+bun run @merossity/new lib my-lib
+bun run @merossity/new ui packages/neon-ui-2026
 ```
 
 ## What It Does

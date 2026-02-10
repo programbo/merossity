@@ -1,6 +1,12 @@
 # lib
 
-Bun library template.
+Bun library template (used by `@merossity/new`).
+
+## Dev
+
+```bash
+bun run dev
+```
 
 ## Build
 

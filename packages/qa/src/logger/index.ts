@@ -1,6 +1,6 @@
 /**
  * Example:
- * import { logger, debug, withDebug, Spinner } from "@bun-monorepo-template/qa/logger";
+ * import { logger, debug, withDebug, Spinner } from "@merossity/qa/logger";
  * logger.info("Task started", { count: 42 });
  * const log = debug("mycli:project");
  * log("Found 3");

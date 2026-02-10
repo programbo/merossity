@@ -1,5 +1,5 @@
 {
-  "extends": "@bun-monorepo-template/qa/tsconfig/web",
+  "extends": "@merossity/qa/tsconfig/web",
   "compilerOptions": {
     "lib": ["ESNext", "DOM"],
     "jsx": "react-jsx",

@@ -1,13 +1,14 @@
 # ui
 
-Tailwind CSS UI library template.
+Tailwind CSS UI library template (used by `@merossity/new`).
 
 ## Usage
 
 ```ts
-import '@bun-monorepo-template/ui/index.css'
-import { Radio, RadioGroup, type RadioProps } from '@bun-monorepo-template/ui/radio'
-import { tv, twMerge, twJoin, type VariantProps } from '@bun-monorepo-template/ui/utils'
+// Replace "@acme/ui" with your UI package name.
+import '@acme/ui/index.css'
+import { Radio, RadioGroup, type RadioProps } from '@acme/ui/radio'
+import { tv, twMerge, twJoin, type VariantProps } from '@acme/ui/utils'
 ```
 
 ## Dev

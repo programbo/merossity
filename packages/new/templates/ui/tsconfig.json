@@ -1,5 +1,5 @@
 {
-  "extends": "@bun-monorepo-template/qa/tsconfig/react-lib",
+  "extends": "@merossity/qa/tsconfig/react-lib",
   "compilerOptions": {
     "paths": {
       "@/*": ["./src/*"]

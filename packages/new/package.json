@@ -1,5 +1,5 @@
 {
-  "name": "@bun-monorepo-template/new",
+  "name": "@merossity/new",
   "module": "index.ts",
   "type": "module",
   "private": true,
@@ -14,7 +14,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "latest",
-    "@bun-monorepo-template/qa": "workspace:*",
+    "@merossity/qa": "workspace:*",
     "bunup": "latest",
     "clerc": "1.2.1"
   },
