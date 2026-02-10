@@ -1,8 +1,113 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import tailwindPlugin from 'bun-plugin-tailwind'
+import {
+  MerossCloudError,
+  defaultMerossConfigPath,
+  getSystemAll,
+  loadMerossConfig,
+  merossCloudListDevices,
+  merossCloudLogin,
+  pingSweep,
+  resolveIpv4FromMac,
+  saveMerossConfig,
+  setToggleX,
+  type MerossCloudCredentials,
+  type MerossCloudDevice,
+} from '@merossity/core/meross'
 import { serveWithControl } from './dev/serve-with-control'
 
-const index = Bun.file(new URL('./index.html', import.meta.url))
-
 const isProduction = process.env.NODE_ENV === 'production'
+
+const nowIso = () => new Date().toISOString()
+
+const loadEnvFromRootIfPresent = async () => {
+  // Bun loads .env from the current working directory. In this monorepo, the
+  // secrets are often stored at repo root, while `apps/web` runs with cwd=apps/web.
+  const candidates = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '..', '.env'),
+    path.resolve(process.cwd(), '..', '..', '.env'),
+  ]
+
+  for (const p of candidates) {
+    try {
+      const text = await Bun.file(p).text()
+      if (!text.trim()) continue
+      for (const rawLine of text.split('\n')) {
+        const line = rawLine.trim()
+        if (!line || line.startsWith('#')) continue
+
+        // Support `export KEY='value'` (as in the user's .env) and `KEY=value`.
+        const cleaned = line.startsWith('export ') ? line.slice('export '.length).trim() : line
+        const eq = cleaned.indexOf('=')
+        if (eq <= 0) continue
+
+        const key = cleaned.slice(0, eq).trim()
+        let value = cleaned.slice(eq + 1).trim()
+        if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+          value = value.slice(1, -1)
+        }
+
+        if (!key) continue
+        if (process.env[key] === undefined) process.env[key] = value
+      }
+      return
+    } catch {
+      // ignore
+    }
+  }
+}
+
+await loadEnvFromRootIfPresent()
+
+const srcDir = path.dirname(fileURLToPath(import.meta.url))
+const distDir = path.resolve(srcDir, '..', 'dist')
+
+const srcIndex = Bun.file(new URL('./index.html', import.meta.url))
+const distIndex = Bun.file(path.join(distDir, 'index.html'))
+
+const ensureDevBuild = async () => {
+  if (isProduction) return
+
+  // Default: build once if dist/index.html doesn't exist.
+  // Set DEV_BUILD_ALWAYS=1 to rebuild on every server start.
+  const always = process.env.DEV_BUILD_ALWAYS === '1'
+  if (!always && (await distIndex.exists())) return
+
+  const result = await Bun.build({
+    entrypoints: [path.join(srcDir, 'index.html')],
+    outdir: distDir,
+    plugins: [tailwindPlugin],
+    minify: false,
+    target: 'browser',
+    sourcemap: 'linked',
+    define: {
+      'process.env.NODE_ENV': JSON.stringify('development'),
+    },
+  })
+
+  if (!result.success) {
+    // Best-effort: keep the server up so the UI can display API errors, even if the frontend build failed.
+    console.warn(`⚠️ Dev build failed (${result.logs.length} logs). Serving source index.html fallback.`)
+  }
+}
+
+await ensureDevBuild()
+
+const index = (await distIndex.exists()) ? distIndex : srcIndex
+
+const tryServeDistAsset = async (pathname: string): Promise<Response | null> => {
+  // Serve built assets (e.g. /chunk-*.js, /chunk-*.css, sourcemaps).
+
+  const clean = pathname.replace(/^\/+/, '')
+  if (!clean) return null
+
+  const file = Bun.file(path.join(distDir, clean))
+  if (!(await file.exists())) return null
+  return new Response(file)
+}
 
 const applySecurityHeaders = (response: Response) => {
   if (!isProduction) return response
@@ -19,9 +124,10 @@ const applySecurityHeaders = (response: Response) => {
     [
       "default-src 'self'",
       "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
+      // Allow Google Fonts for the UI typography. This is only enabled in production.
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data:",
-      "font-src 'self'",
+      "font-src 'self' data: https://fonts.gstatic.com",
       "connect-src 'self'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -44,31 +150,249 @@ const html = (body: BodyInit) => {
   return applySecurityHeaders(new Response(body, { headers }))
 }
 
+type ApiOk<T> = { ok: true; data: T }
+type ApiErr = { ok: false; error: { message: string; code?: string; details?: unknown } }
+const apiOk = <T>(data: T): ApiOk<T> => ({ ok: true, data })
+const apiErr = (message: string, code?: string, details?: unknown): ApiErr => ({
+  ok: false,
+  error: { message, code, details },
+})
+
+const parseJsonBody = async (req: Request) => {
+  const ct = req.headers.get('content-type') ?? ''
+  if (!ct.toLowerCase().includes('application/json')) return null
+  return (await req.json().catch(() => null)) as any
+}
+
+const configPath = () => process.env.MEROSS_CONFIG_PATH || defaultMerossConfigPath()
+
+const readConfig = async () => await loadMerossConfig(configPath())
+const writeConfig = async (next: Awaited<ReturnType<typeof readConfig>>) => await saveMerossConfig(next, configPath())
+
+const summarizeCloud = (cloud: MerossCloudCredentials) => ({
+  domain: cloud.domain,
+  mqttDomain: cloud.mqttDomain,
+  userId: cloud.userId,
+  userEmail: cloud.userEmail,
+  key: cloud.key,
+  tokenRedacted: cloud.token ? `${cloud.token.slice(0, 4)}…${cloud.token.slice(-4)}` : '',
+})
+
+const inferMfaRequired = (e: unknown) => {
+  if (!(e instanceof MerossCloudError)) return false
+  const info = (e.info ?? '').toLowerCase()
+  // Best-effort: Meross cloud uses a variety of info strings.
+  return info.includes('mfa') || info.includes('totp') || info.includes('verify') || info.includes('verification')
+}
+
+const requireLanHost = async (uuid: string) => {
+  const cfg = await readConfig()
+  const host = cfg.hosts?.[uuid]?.host
+  if (!host) throw new Error(`No LAN host known for device uuid=${uuid}. Resolve host first.`)
+  return host
+}
+
+const requireLanKey = async () => {
+  const cfg = await readConfig()
+  const key = cfg.cloud?.key || process.env.MEROSS_KEY
+  if (!key) throw new Error(`Missing Meross key. Login (cloud) or set MEROSS_KEY.`)
+  return key
+}
+
 const _server = await serveWithControl({
   routes: {
-    // Serve index.html for all unmatched routes.
-    '/*': () => html(index),
+    // Production: serve built assets (dist/*). All other unmatched routes return index.html for SPA navigation.
+    '/*': async (req) => {
+      const url = new URL(req.url)
+      const asset = await tryServeDistAsset(url.pathname)
+      if (asset) return applySecurityHeaders(asset)
+      return html(index)
+    },
 
-    '/api/hello': {
+    '/api/status': {
       async GET(_req) {
-        return json({
-          message: 'Hello, world!',
-          method: 'GET',
-        })
-      },
-      async PUT(_req) {
-        return json({
-          message: 'Hello, world!',
-          method: 'PUT',
-        })
+        const cfg = await readConfig()
+        return json(
+          apiOk({
+            env: {
+              hasEmail: Boolean(process.env.MEROSS_EMAIL),
+              hasPassword: Boolean(process.env.MEROSS_PASSWORD),
+              hasKey: Boolean(process.env.MEROSS_KEY),
+            },
+            config: {
+              path: configPath(),
+              hasCloudCreds: Boolean(cfg.cloud?.token && cfg.cloud?.key),
+              hasDevices: Boolean(cfg.devices?.list?.length),
+              hasHosts: Boolean(cfg.hosts && Object.keys(cfg.hosts).length > 0),
+              updatedAt: {
+                cloud: cfg.cloud?.updatedAt,
+                devices: cfg.devices?.updatedAt,
+              },
+            },
+          }),
+        )
       },
     },
 
-    '/api/hello/:name': async (req) => {
-      const name = req.params.name
-      return json({
-        message: `Hello, ${name}!`,
-      })
+    '/api/cloud/login': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const email = String(body.email ?? process.env.MEROSS_EMAIL ?? '')
+        const password = String(body.password ?? process.env.MEROSS_PASSWORD ?? '')
+        const mfaCode = body.mfaCode ? String(body.mfaCode) : undefined
+        const domain = body.domain ? String(body.domain) : undefined
+        const scheme = body.scheme === 'http' || body.scheme === 'https' ? (body.scheme as 'http' | 'https') : undefined
+        const timeoutMs = body.timeoutMs !== undefined ? Number(body.timeoutMs) : undefined
+        if (!email || !password)
+          return json(
+            apiErr('Missing email/password (provide in request or set MEROSS_EMAIL/MEROSS_PASSWORD).', 'missing_creds'),
+          )
+
+        try {
+          const res = await merossCloudLogin(
+            { email, password, mfaCode },
+            { domain, scheme, timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined },
+          )
+          const cfg = await readConfig()
+          await writeConfig({
+            ...cfg,
+            cloud: { ...res.creds, updatedAt: nowIso() },
+          })
+          return json(apiOk({ cloud: summarizeCloud(res.creds) }))
+        } catch (e) {
+          if (inferMfaRequired(e)) {
+            return json(
+              apiErr(
+                'MFA required. Provide a TOTP code and try again.',
+                'mfa_required',
+                e instanceof MerossCloudError ? { apiStatus: e.apiStatus, info: e.info } : undefined,
+              ),
+            )
+          }
+          if (e instanceof MerossCloudError) {
+            return json(apiErr(e.message, 'cloud_error', { apiStatus: e.apiStatus, info: e.info }))
+          }
+          return json(apiErr(e instanceof Error ? e.message : String(e), 'unknown'), { status: 500 })
+        }
+      },
+    },
+
+    '/api/cloud/creds': {
+      async GET(_req) {
+        const cfg = await readConfig()
+        if (!cfg.cloud) return json(apiOk({ cloud: null }))
+        return json(apiOk({ cloud: summarizeCloud(cfg.cloud) }))
+      },
+    },
+
+    '/api/cloud/devices': {
+      async GET(_req) {
+        const cfg = await readConfig()
+        const list = (cfg.devices?.list ?? []) as MerossCloudDevice[]
+        return json(apiOk({ updatedAt: cfg.devices?.updatedAt ?? null, list }))
+      },
+    },
+
+    '/api/cloud/devices/refresh': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const timeoutMs = body.timeoutMs !== undefined ? Number(body.timeoutMs) : undefined
+        const cfg = await readConfig()
+        if (!cfg.cloud)
+          return json(apiErr('Not logged in. Run /api/cloud/login first.', 'not_logged_in'))
+
+        try {
+          const list = await merossCloudListDevices(cfg.cloud, {
+            timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+          })
+          await writeConfig({
+            ...cfg,
+            devices: { updatedAt: nowIso(), list },
+          })
+          return json(apiOk({ count: list.length, list }))
+        } catch (e) {
+          if (e instanceof MerossCloudError) {
+            return json(apiErr(e.message, 'cloud_error', { apiStatus: e.apiStatus, info: e.info }))
+          }
+          return json(apiErr(e instanceof Error ? e.message : String(e), 'unknown'), { status: 500 })
+        }
+      },
+    },
+
+    '/api/hosts': {
+      async GET(_req) {
+        const cfg = await readConfig()
+        return json(apiOk({ hosts: cfg.hosts ?? {} }))
+      },
+    },
+
+    '/api/hosts/resolve': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const uuid = String(body.uuid ?? '')
+        const mac = String(body.mac ?? body.macAddress ?? '')
+        const cidr = body.cidr ? String(body.cidr) : ''
+        if (!uuid) return json(apiErr('Missing uuid', 'missing_uuid'))
+        if (!mac) return json(apiErr('Missing mac (macAddress)', 'missing_mac'))
+
+        if (cidr) {
+          // Populate ARP table best-effort, then resolve by MAC.
+          await pingSweep(cidr, { timeoutMs: 200, concurrency: 64 }).catch(() => {})
+        }
+
+        const ip = await resolveIpv4FromMac(mac)
+        if (!ip)
+          return json(
+            apiErr(
+              'Could not resolve IP from MAC. Try providing a CIDR (e.g. 192.168.1.0/24) and ensure the device is online.',
+              'host_not_found',
+            ),
+          )
+
+        const cfg = await readConfig()
+        const nextHosts = { ...cfg.hosts }
+        nextHosts[uuid] = { host: ip, updatedAt: nowIso() }
+        await writeConfig({ ...cfg, hosts: nextHosts })
+        return json(apiOk({ uuid, host: ip }))
+      },
+    },
+
+    '/api/lan/system-all': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const uuid = String(body.uuid ?? '')
+        if (!uuid) return json(apiErr('Missing uuid', 'missing_uuid'))
+
+        try {
+          const host = await requireLanHost(uuid)
+          const key = await requireLanKey()
+          const data = await getSystemAll<any>({ host, key })
+          return json(apiOk({ host, data }))
+        } catch (e) {
+          return json(apiErr(e instanceof Error ? e.message : String(e), 'lan_error'))
+        }
+      },
+    },
+
+    '/api/lan/toggle': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const uuid = String(body.uuid ?? '')
+        const channel = body.channel === undefined ? 0 : Number(body.channel)
+        const onoff = Number(body.onoff) === 1 ? 1 : 0
+        if (!uuid) return json(apiErr('Missing uuid', 'missing_uuid'))
+        if (!Number.isInteger(channel) || channel < 0)
+          return json(apiErr('Invalid channel', 'invalid_channel'))
+
+        try {
+          const host = await requireLanHost(uuid)
+          const key = await requireLanKey()
+          const resp = await setToggleX<any>({ host, key, channel, onoff })
+          return json(apiOk({ host, channel, onoff, resp }))
+        } catch (e) {
+          return json(apiErr(e instanceof Error ? e.message : String(e), 'lan_error'))
+        }
+      },
     },
   },
 

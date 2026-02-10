@@ -17,8 +17,8 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "paths": {
-      "@bun-monorepo-template/qa/logger": ["./src/logger/index.ts"],
-      "@bun-monorepo-template/qa/logger/*": ["./src/logger/*"]
+      "@merossity/qa/logger": ["./src/logger/index.ts"],
+      "@merossity/qa/logger/*": ["./src/logger/*"]
     }
   }
 }

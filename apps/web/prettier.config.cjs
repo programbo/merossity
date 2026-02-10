@@ -1,1 +1,1 @@
-module.exports = require('@bun-monorepo-template/qa/prettier-tailwind')
+module.exports = require('@merossity/qa/prettier-tailwind')

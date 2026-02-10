@@ -13,7 +13,7 @@ const template = (name: string) => path.join(TEMPLATES_DIR, name)
 
 const readJson = async (filePath: string) => JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>
 
-describe('@bun-monorepo-template/new templates', () => {
+describe('@merossity/new templates', () => {
   it('includes required templates', async () => {
     expect(existsSync(template('web'))).toBeTrue()
     expect(existsSync(template('api'))).toBeTrue()

@@ -1,5 +1,5 @@
 {
-  "extends": "@bun-monorepo-template/qa/tsconfig/node",
+  "extends": "@merossity/qa/tsconfig/node",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {

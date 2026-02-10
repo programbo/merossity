@@ -16,7 +16,8 @@
     "new": "bun run packages/new/index.ts"
   },
   "devDependencies": {
-    "@bun-monorepo-template/qa": "workspace:*",
+    "@merossity/core": "workspace:*",
+    "@merossity/qa": "workspace:*",
     "@trivago/prettier-plugin-sort-imports": "latest",
     "concurrently": "latest",
     "oxlint": "latest",

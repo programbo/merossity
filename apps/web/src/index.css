@@ -1,11 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,200..900&family=IBM+Plex+Mono:wght@300;400;600&display=swap');
 @import 'tailwindcss';
 
 @layer base {
   :root {
+    --bg-0: #0c0f14;
+    --bg-1: #0f172a;
+    --paper: #fff2d8;
+    --ink: #0b1020;
+    --muted: rgba(11, 16, 32, 0.6);
+    --accent: #ff6a00;
+    --accent-2: #2dd4bf;
+    --danger: #ff3b3b;
+    --shadow: rgba(0, 0, 0, 0.28);
+
+    --font-display: 'Fraunces', ui-serif, Georgia, serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
     @apply font-sans;
   }
 
   body {
+    font-family: var(--font-display);
+    color: var(--ink);
     @apply m-0 min-h-screen min-w-[320px];
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  .switchboard-bg {
+    background:
+      radial-gradient(1100px 700px at 15% 10%, rgba(255, 106, 0, 0.18), transparent 60%),
+      radial-gradient(900px 700px at 90% 20%, rgba(45, 212, 191, 0.14), transparent 62%),
+      radial-gradient(800px 500px at 50% 95%, rgba(255, 242, 216, 0.75), transparent 68%),
+      linear-gradient(180deg, #07090d, var(--bg-1));
+  }
+
+  .paper {
+    background: var(--paper);
+  }
+
+  .paper-grid {
+    background:
+      linear-gradient(to right, rgba(11, 16, 32, 0.06) 1px, transparent 1px) 0 0 / 18px 18px,
+      linear-gradient(to bottom, rgba(11, 16, 32, 0.06) 1px, transparent 1px) 0 0 / 18px 18px,
+      var(--paper);
+  }
+
+  .panel-shadow {
+    box-shadow:
+      0 30px 70px var(--shadow),
+      0 1px 0 rgba(255, 255, 255, 0.35) inset;
   }
 }

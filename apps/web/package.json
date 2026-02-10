@@ -13,13 +13,13 @@
   },
   "dependencies": {
     "bun-plugin-tailwind": "^0.1.2",
-    "@bun-monorepo-template/core": "workspace:*",
+    "@merossity/core": "workspace:*",
     "react": "^19",
     "react-dom": "^19",
     "tailwindcss": "^4.1.11"
   },
   "devDependencies": {
-    "@bun-monorepo-template/qa": "workspace:*",
+    "@merossity/qa": "workspace:*",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@types/bun": "latest"

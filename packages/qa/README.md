@@ -1,4 +1,4 @@
-# @bun-monorepo-template/qa
+# @merossity/qa
 
 Shared QA config for the monorepo (Prettier, Oxlint, TypeScript).
 
@@ -31,20 +31,20 @@ bun run --cwd packages/qa qa:init apps/web --kind web --tailwind
 
 Exported presets:
 
-- `@bun-monorepo-template/qa/tsconfig` (base)
-- `@bun-monorepo-template/qa/tsconfig/node`
-- `@bun-monorepo-template/qa/tsconfig/web`
-- `@bun-monorepo-template/qa/tsconfig/react-lib`
+- `@merossity/qa/tsconfig` (base)
+- `@merossity/qa/tsconfig/node`
+- `@merossity/qa/tsconfig/web`
+- `@merossity/qa/tsconfig/react-lib`
 
 `qa:init` uses:
 
-- `web` → `@bun-monorepo-template/qa/tsconfig/web`
-- `cli`/`lib` → `@bun-monorepo-template/qa/tsconfig/node`
-- React library packages → `@bun-monorepo-template/qa/tsconfig/react-lib`
+- `web` → `@merossity/qa/tsconfig/web`
+- `cli`/`lib` → `@merossity/qa/tsconfig/node`
+- React library packages → `@merossity/qa/tsconfig/react-lib`
 
 ## Testkit
 
-`@bun-monorepo-template/qa/testkit` provides lightweight helpers for Bun tests:
+`@merossity/qa/testkit` provides lightweight helpers for Bun tests:
 
 - process helpers (`spawnProcess`, `waitForOutput`)
 - server helpers (`startServer`, `waitForUrl`, `getFreePort`)
@@ -54,8 +54,8 @@ Exported presets:
 Example:
 
 ```ts
-import { startServer } from '@bun-monorepo-template/qa/testkit'
-import { fetchJson } from '@bun-monorepo-template/qa/testkit'
+import { startServer } from '@merossity/qa/testkit'
+import { fetchJson } from '@merossity/qa/testkit'
 
 const server = await startServer({ command: 'bun', args: ['src/index.ts'], cwd: process.cwd() })
 await server.ready

@@ -51,7 +51,7 @@ const expectLibScripts = (pkg: { scripts: Record<string, string>; devDependencie
   expect(pkg.scripts.lint).toContain('oxlint')
   expect(pkg.scripts.format).toContain('prettier')
   expect(pkg.scripts.typecheck).toContain('tsc')
-  expect(pkg.devDependencies['@bun-monorepo-template/qa']).toBe('workspace:*')
+  expect(pkg.devDependencies['@merossity/qa']).toBe('workspace:*')
 }
 
 const expectConfigFiles = (dir: string) => {
@@ -86,7 +86,7 @@ describe('qa:init', () => {
       await runQaInit([dir, '--kind', 'lib'])
 
       const prettierConfig = await readFile(path.join(dir, 'prettier.config.cjs'), 'utf8')
-      expect(prettierConfig).toContain('@bun-monorepo-template/qa/prettier-tailwind')
+      expect(prettierConfig).toContain('@merossity/qa/prettier-tailwind')
     } finally {
       await rm(dir, { force: true, recursive: true })
     }
@@ -109,7 +109,7 @@ describe('qa:init', () => {
       const config = JSON.parse(await readFile(path.join(dir, 'tsconfig.json'), 'utf8')) as {
         extends?: string
       }
-      expect(config.extends).toBe('@bun-monorepo-template/qa/tsconfig/node')
+      expect(config.extends).toBe('@merossity/qa/tsconfig/node')
     } finally {
       await rm(dir, { force: true, recursive: true })
     }
