@@ -1,24 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes } from 'react'
+import { useEffect, useMemo, type ButtonHTMLAttributes } from 'react'
 import './index.css'
-import { ApiError, apiGet, apiPost } from './lib/api'
-import type { CloudSummary, MerossCloudDevice, StatusResponse } from './lib/types'
-
-type HostsMap = Record<string, { host: string; updatedAt: string }>
-
-type Tab = 'connect' | 'devices' | 'settings'
+import { getHashTab } from './lib/nav'
+import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
 
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
-
-const getHashTab = (): Tab => {
-  const raw = (location.hash || '').replace(/^#/, '').trim()
-  if (raw === 'devices') return 'devices'
-  if (raw === 'settings') return 'settings'
-  return 'connect'
-}
-
-const setHashTab = (t: Tab) => {
-  location.hash = `#${t}`
-}
 
 const Button = (props: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'ink' | 'accent' | 'danger' }) => {
   const tone = props.tone ?? 'ink'
@@ -109,60 +94,26 @@ const Toast = (props: { kind: 'ok' | 'err'; title: string; detail?: string }) =>
 }
 
 export function App() {
-  const [tab, setTab] = useState<Tab>(() => getHashTab())
-  const [status, setStatus] = useState<StatusResponse | null>(null)
-  const [cloud, setCloud] = useState<CloudSummary | null>(null)
-  const [devices, setDevices] = useState<MerossCloudDevice[]>([])
-  const [hosts, setHosts] = useState<HostsMap>({})
-  const [busy, setBusy] = useState<string | null>(null)
+  return (
+    <AppProvider>
+      <AppView />
+    </AppProvider>
+  )
+}
 
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; title: string; detail?: string } | null>(null)
-  const toastTimer = useRef<number | null>(null)
-  const showToast = (t: typeof toast) => {
-    setToast(t)
-    if (toastTimer.current) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 4500)
-  }
+function AppView() {
+  const app = useAppActorRef()
+  const tab = useAppSelector((s) => s.context.tab)
+  const status = useAppSelector((s) => s.context.status)
+  const cloud = useAppSelector((s) => s.context.cloud)
+  const busy = useAppSelector((s) => s.context.busy)
+  const toast = useAppSelector((s) => s.context.toast)
 
   useEffect(() => {
-    const onHash = () => setTab(getHashTab())
+    const onHash = () => app.send({ type: 'HASH_CHANGED', tab: getHashTab() })
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [])
-
-  const refreshStatus = async () => {
-    const st = await apiGet<StatusResponse>('/api/status')
-    setStatus(st)
-    return st
-  }
-
-  const refreshCloud = async () => {
-    try {
-      const res = await apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
-      setCloud(res.cloud)
-    } catch {
-      setCloud(null)
-    }
-  }
-
-  const refreshDevices = async () => {
-    const res = await apiGet<{ updatedAt: string | null; list: MerossCloudDevice[] }>('/api/cloud/devices')
-    setDevices(res.list)
-  }
-
-  const refreshHosts = async () => {
-    const res = await apiGet<{ hosts: HostsMap }>('/api/hosts')
-    setHosts(res.hosts)
-  }
-
-  const bootstrap = async () => {
-    await refreshStatus()
-    await Promise.all([refreshCloud(), refreshDevices(), refreshHosts()])
-  }
-
-  useEffect(() => {
-    void bootstrap()
-  }, [])
+  }, [app])
 
   const appTitle = useMemo(() => {
     const c = cloud?.userEmail ? cloud.userEmail : 'local control'
@@ -201,19 +152,19 @@ export function App() {
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button tone="ink" onClick={() => void bootstrap()} disabled={busy !== null}>
+              <Button tone="ink" onClick={() => app.send({ type: 'REFRESH_ALL' })} disabled={busy !== null}>
                 Refresh
               </Button>
               <Button
                 tone="accent"
                 onClick={() => {
-                  setHashTab(cloud ? 'devices' : 'connect')
+                  app.send({ type: 'NAVIGATE', tab: cloud ? 'devices' : 'connect' })
                 }}
                 disabled={busy !== null}
               >
                 {cloud ? 'Devices' : 'Connect'}
               </Button>
-              <Button tone="ink" onClick={() => setHashTab('settings')} disabled={busy !== null}>
+              <Button tone="ink" onClick={() => app.send({ type: 'NAVIGATE', tab: 'settings' })} disabled={busy !== null}>
                 Settings
               </Button>
             </div>
@@ -221,45 +172,18 @@ export function App() {
         </header>
 
         <main className="space-y-4">
-          {tab === 'connect' ? (
-            <ConnectCard
-              status={status}
-              busy={busy}
-              setBusy={setBusy}
-              onToast={showToast}
-              onAuthed={async () => {
-                await Promise.all([refreshStatus(), refreshCloud()])
-                setHashTab('devices')
-              }}
-            />
-          ) : null}
-
-          {tab === 'devices' ? (
-            <DevicesCard
-              cloud={cloud}
-              devices={devices}
-              hosts={hosts}
-              busy={busy}
-              setBusy={setBusy}
-              onToast={showToast}
-              refreshAll={async () => {
-                await Promise.all([refreshStatus(), refreshCloud(), refreshDevices(), refreshHosts()])
-              }}
-              refreshHosts={refreshHosts}
-              setDevices={setDevices}
-            />
-          ) : null}
-
-          {tab === 'settings' ? <SettingsCard status={status} cloud={cloud} onToast={showToast} /> : null}
+          {tab === 'connect' ? <ConnectCard /> : null}
+          {tab === 'devices' ? <DevicesCard /> : null}
+          {tab === 'settings' ? <SettingsCard /> : null}
         </main>
       </div>
 
       <nav className="fixed right-0 bottom-0 left-0">
         <div className="mx-auto max-w-[560px] px-4 pb-4">
           <div className="paper panel-shadow grid grid-cols-3 overflow-hidden rounded-[22px] border border-black/10">
-            <NavItem active={tab === 'connect'} label="Connect" onClick={() => setHashTab('connect')} />
-            <NavItem active={tab === 'devices'} label="Devices" onClick={() => setHashTab('devices')} />
-            <NavItem active={tab === 'settings'} label="Settings" onClick={() => setHashTab('settings')} />
+            <NavItem active={tab === 'connect'} label="Connect" onClick={() => app.send({ type: 'NAVIGATE', tab: 'connect' })} />
+            <NavItem active={tab === 'devices'} label="Devices" onClick={() => app.send({ type: 'NAVIGATE', tab: 'devices' })} />
+            <NavItem active={tab === 'settings'} label="Settings" onClick={() => app.send({ type: 'NAVIGATE', tab: 'settings' })} />
           </div>
         </div>
       </nav>
@@ -286,50 +210,13 @@ const NavItem = (props: { active: boolean; label: string; onClick: () => void })
   )
 }
 
-const ConnectCard = (props: {
-  status: StatusResponse | null
-  busy: string | null
-  setBusy: (v: string | null) => void
-  onToast: (t: { kind: 'ok' | 'err'; title: string; detail?: string } | null) => void
-  onAuthed: () => Promise<void>
-}) => {
-  const [useEnv, setUseEnv] = useState(true)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [mfaCode, setMfaCode] = useState('')
-  const [mfaRequired, setMfaRequired] = useState(false)
+const ConnectCard = () => {
+  const app = useAppActorRef()
+  const status = useAppSelector((s) => s.context.status)
+  const busy = useAppSelector((s) => s.context.busy)
+  const connect = useAppSelector((s) => s.context.connect)
 
-  const envReady = Boolean(props.status?.env.hasEmail && props.status?.env.hasPassword)
-
-  const doLogin = async () => {
-    props.setBusy('login')
-    try {
-      const body: any = {}
-      if (!useEnv) {
-        body.email = email
-        body.password = password
-      } else {
-        // If user typed creds, allow override while still defaulting to env.
-        if (email.trim()) body.email = email.trim()
-        if (password) body.password = password
-      }
-      if (mfaCode.trim()) body.mfaCode = mfaCode.trim()
-
-      const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
-      setMfaRequired(false)
-      props.onToast({ kind: 'ok', title: 'Cloud linked', detail: `Domain: ${res.cloud.domain}` })
-      await props.onAuthed()
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'mfa_required') {
-        setMfaRequired(true)
-        props.onToast({ kind: 'err', title: 'Verification required', detail: 'Enter your TOTP code and try again.' })
-        return
-      }
-      props.onToast({ kind: 'err', title: 'Login failed', detail: e instanceof Error ? e.message : String(e) })
-    } finally {
-      props.setBusy(null)
-    }
-  }
+  const envReady = Boolean(status?.env.hasEmail && status?.env.hasPassword)
 
   return (
     <Card
@@ -351,63 +238,72 @@ const ConnectCard = (props: {
               </div>
             </div>
             <button
-              onClick={() => setUseEnv((v) => !v)}
+              onClick={() => app.send({ type: 'CONNECT.SET_USE_ENV', useEnv: !connect.useEnv })}
               className={[
                 'rounded-full border px-3 py-2',
                 'font-mono text-[11px] tracking-[0.14em] uppercase',
-                useEnv ? 'border-black/15 bg-white/70' : 'border-black/25 bg-white',
+                connect.useEnv ? 'border-black/15 bg-white/70' : 'border-black/25 bg-white',
               ].join(' ')}
             >
-              {useEnv ? 'use env' : 'manual'}
+              {connect.useEnv ? 'use env' : 'manual'}
             </button>
           </div>
         </div>
 
-        {!useEnv ? (
+        {!connect.useEnv ? (
           <div className="grid gap-4">
-            <Field label="email" value={email} onChange={setEmail} placeholder="name@example.com" />
-            <Field label="password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+            <Field
+              label="email"
+              value={connect.email}
+              onChange={(email) => app.send({ type: 'CONNECT.SET_EMAIL', email })}
+              placeholder="name@example.com"
+            />
+            <Field
+              label="password"
+              value={connect.password}
+              onChange={(password) => app.send({ type: 'CONNECT.SET_PASSWORD', password })}
+              type="password"
+              placeholder="••••••••"
+            />
           </div>
         ) : (
           <div className="grid gap-4">
             <Field
               label="email (optional override)"
-              value={email}
-              onChange={setEmail}
+              value={connect.email}
+              onChange={(email) => app.send({ type: 'CONNECT.SET_EMAIL', email })}
               placeholder="leave blank to use .env"
             />
             <Field
               label="password (optional override)"
-              value={password}
-              onChange={setPassword}
+              value={connect.password}
+              onChange={(password) => app.send({ type: 'CONNECT.SET_PASSWORD', password })}
               type="password"
               placeholder="leave blank to use .env"
             />
           </div>
         )}
 
-        {mfaRequired ? (
+        {connect.mfaRequired ? (
           <Field
             label="verification code (TOTP)"
-            value={mfaCode}
-            onChange={setMfaCode}
+            value={connect.mfaCode}
+            onChange={(mfaCode) => app.send({ type: 'CONNECT.SET_MFA_CODE', mfaCode })}
             placeholder="123456"
             hint="Meross cloud sometimes requires an app-based verification code. Paste it here."
           />
         ) : null}
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button tone="accent" onClick={() => void doLogin()} disabled={props.busy !== null}>
-            {props.busy === 'login' ? 'Linking…' : 'Link cloud'}
+          <Button tone="accent" onClick={() => app.send({ type: 'CONNECT.SUBMIT' })} disabled={busy !== null}>
+            {busy === 'login' ? 'Linking…' : 'Link cloud'}
           </Button>
           <Button
             tone="ink"
             onClick={() => {
-              setMfaRequired(false)
-              setMfaCode('')
-              props.onToast({ kind: 'ok', title: 'Cleared verification prompt' })
+              app.send({ type: 'CONNECT.RESET_MFA' })
             }}
-            disabled={props.busy !== null}
+            disabled={busy !== null}
           >
             Reset
           </Button>
@@ -422,92 +318,15 @@ const ConnectCard = (props: {
   )
 }
 
-const DevicesCard = (props: {
-  cloud: CloudSummary | null
-  devices: MerossCloudDevice[]
-  hosts: HostsMap
-  busy: string | null
-  setBusy: (v: string | null) => void
-  onToast: (t: { kind: 'ok' | 'err'; title: string; detail?: string } | null) => void
-  refreshAll: () => Promise<void>
-  refreshHosts: () => Promise<void>
-  setDevices: (d: MerossCloudDevice[]) => void
-}) => {
-  const [cidr, setCidr] = useState(() => localStorage.getItem('merossity.cidr') ?? '')
-  const [expandedUuid, setExpandedUuid] = useState<string | null>(null)
-  const [systemDump, setSystemDump] = useState<{ uuid: string; host: string; data: unknown } | null>(null)
+const DevicesCard = () => {
+  const app = useAppActorRef()
+  const cloud = useAppSelector((s) => s.context.cloud)
+  const devices = useAppSelector((s) => s.context.devices)
+  const hosts = useAppSelector((s) => s.context.hosts)
+  const busy = useAppSelector((s) => s.context.busy)
+  const devicesUi = useAppSelector((s) => s.context.devicesUi)
 
-  const refreshFromCloud = async () => {
-    props.setBusy('refresh_devices')
-    try {
-      const res = await apiPost<{ count: number; list: MerossCloudDevice[] }>('/api/cloud/devices/refresh', {})
-      props.setDevices(res.list)
-      props.onToast({ kind: 'ok', title: 'Devices updated', detail: `${res.count} devices from cloud.` })
-    } catch (e) {
-      props.onToast({ kind: 'err', title: 'Refresh failed', detail: e instanceof Error ? e.message : String(e) })
-    } finally {
-      props.setBusy(null)
-    }
-  }
-
-  const resolveHost = async (d: MerossCloudDevice) => {
-    const mac = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
-    if (!mac) {
-      props.onToast({
-        kind: 'err',
-        title: 'Missing MAC address',
-        detail: 'Device entry did not include mac/macAddress. Try a fresh device list.',
-      })
-      return
-    }
-
-    localStorage.setItem('merossity.cidr', cidr)
-    props.setBusy(`resolve:${d.uuid}`)
-    try {
-      const res = await apiPost<{ uuid: string; host: string }>('/api/hosts/resolve', {
-        uuid: d.uuid,
-        mac,
-        cidr: cidr.trim() || undefined,
-      })
-      await props.refreshHosts()
-      props.onToast({ kind: 'ok', title: 'Host resolved', detail: `${d.devName ?? d.uuid}: ${res.host}` })
-    } catch (e) {
-      props.onToast({ kind: 'err', title: 'Host resolve failed', detail: e instanceof Error ? e.message : String(e) })
-    } finally {
-      props.setBusy(null)
-    }
-  }
-
-  const toggle = async (uuid: string, onoff: 0 | 1) => {
-    props.setBusy(`toggle:${uuid}`)
-    try {
-      await apiPost('/api/lan/toggle', { uuid, channel: 0, onoff })
-      props.onToast({ kind: 'ok', title: onoff ? 'Switched on' : 'Switched off', detail: clampText(uuid, 12) })
-    } catch (e) {
-      props.onToast({ kind: 'err', title: 'Toggle failed', detail: e instanceof Error ? e.message : String(e) })
-    } finally {
-      props.setBusy(null)
-    }
-  }
-
-  const fetchSystemAll = async (uuid: string) => {
-    props.setBusy(`system:${uuid}`)
-    try {
-      const res = await apiPost<{ host: string; data: unknown }>('/api/lan/system-all', { uuid })
-      setSystemDump({ uuid, host: res.host, data: res.data })
-      props.onToast({ kind: 'ok', title: 'Fetched system snapshot', detail: res.host })
-    } catch (e) {
-      props.onToast({
-        kind: 'err',
-        title: 'System snapshot failed',
-        detail: e instanceof Error ? e.message : String(e),
-      })
-    } finally {
-      props.setBusy(null)
-    }
-  }
-
-  const cloudHint = props.cloud ? `${props.cloud.userEmail} · ${props.cloud.domain}` : 'Not linked'
+  const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : 'Not linked'
 
   return (
     <Card
@@ -517,10 +336,14 @@ const DevicesCard = (props: {
     >
       <div className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button tone="accent" onClick={() => void refreshFromCloud()} disabled={props.busy !== null || !props.cloud}>
-            {props.busy === 'refresh_devices' ? 'Refreshing…' : 'Refresh list'}
+          <Button
+            tone="accent"
+            onClick={() => app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })}
+            disabled={busy !== null || !cloud}
+          >
+            {busy === 'refresh_devices' ? 'Refreshing…' : 'Refresh list'}
           </Button>
-          <Button tone="ink" onClick={() => void props.refreshAll()} disabled={props.busy !== null}>
+          <Button tone="ink" onClick={() => app.send({ type: 'REFRESH_ALL' })} disabled={busy !== null}>
             Sync local
           </Button>
         </div>
@@ -528,21 +351,21 @@ const DevicesCard = (props: {
         <div className="rounded-2xl border border-black/10 bg-white/55 p-4">
           <Field
             label="LAN scan CIDR (optional)"
-            value={cidr}
-            onChange={setCidr}
+            value={devicesUi.cidr}
+            onChange={(cidr) => app.send({ type: 'DEVICES.SET_CIDR', cidr })}
             placeholder="192.168.1.0/24"
             hint="If host resolve fails, supply your LAN range to populate ARP entries (quick ping sweep)."
           />
         </div>
 
-        {props.devices.length === 0 ? (
+        {devices.length === 0 ? (
           <div className="rounded-2xl border border-black/10 bg-white/60 p-4 text-[14px] text-black/70">
             No devices yet. Link cloud, then refresh.
           </div>
         ) : (
           <div className="grid gap-3">
-            {props.devices.map((d) => {
-              const host = props.hosts[d.uuid]?.host
+            {devices.map((d) => {
+              const host = hosts[d.uuid]?.host
               const online = String(d.onlineStatus ?? '').toLowerCase()
               const onlineChip =
                 online.includes('online') || online === '1'
@@ -554,7 +377,7 @@ const DevicesCard = (props: {
               const title = d.devName || d.uuid
               const subtitle = [d.deviceType, d.subType].filter(Boolean).join(' / ')
               const mac = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
-              const expanded = expandedUuid === d.uuid
+              const expanded = devicesUi.expandedUuid === d.uuid
 
               return (
                 <div key={d.uuid} className="rounded-[18px] border border-black/10 bg-white/55 p-4">
@@ -581,8 +404,8 @@ const DevicesCard = (props: {
                     <div className="flex flex-col gap-2">
                       <Button
                         tone="ink"
-                        onClick={() => setExpandedUuid(expanded ? null : d.uuid)}
-                        disabled={props.busy !== null}
+                        onClick={() => app.send({ type: 'DEVICES.TOGGLE_EXPANDED', uuid: d.uuid })}
+                        disabled={busy !== null}
                       >
                         {expanded ? 'Close' : 'Open'}
                       </Button>
@@ -591,23 +414,38 @@ const DevicesCard = (props: {
 
                   {expanded ? (
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      <Button tone="accent" onClick={() => void resolveHost(d)} disabled={props.busy !== null}>
+                      <Button
+                        tone="accent"
+                        onClick={() =>
+                          app.send({
+                            type: 'DEVICES.RESOLVE_HOST',
+                            uuid: d.uuid,
+                            mac,
+                            title: d.devName ?? d.uuid,
+                          })
+                        }
+                        disabled={busy !== null}
+                      >
                         Resolve host
                       </Button>
                       <Button
                         tone="ink"
-                        onClick={() => void fetchSystemAll(d.uuid)}
-                        disabled={props.busy !== null || !host}
+                        onClick={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid: d.uuid })}
+                        disabled={busy !== null || !host}
                       >
                         System snapshot
                       </Button>
-                      <Button tone="ink" onClick={() => void toggle(d.uuid, 1)} disabled={props.busy !== null || !host}>
+                      <Button
+                        tone="ink"
+                        onClick={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 1 })}
+                        disabled={busy !== null || !host}
+                      >
                         Toggle ON
                       </Button>
                       <Button
                         tone="danger"
-                        onClick={() => void toggle(d.uuid, 0)}
-                        disabled={props.busy !== null || !host}
+                        onClick={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 0 })}
+                        disabled={busy !== null || !host}
                       >
                         Toggle OFF
                       </Button>
@@ -620,11 +458,11 @@ const DevicesCard = (props: {
         )}
       </div>
 
-      {systemDump ? (
+      {devicesUi.systemDump ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={(e) => {
-            if (e.currentTarget === e.target) setSystemDump(null)
+            if (e.currentTarget === e.target) app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })
           }}
         >
           <div className="paper panel-shadow w-[min(96vw,720px)] overflow-hidden rounded-[22px] border border-black/15">
@@ -634,16 +472,16 @@ const DevicesCard = (props: {
                   <div className="font-mono text-[11px] tracking-[0.14em] text-black/55 uppercase">
                     Appliance.System.All
                   </div>
-                  <div className="font-display text-[20px] leading-tight">{clampText(systemDump.uuid, 18)}</div>
-                  <div className="mt-1 font-mono text-[12px] text-black/55">{systemDump.host}</div>
+                  <div className="font-display text-[20px] leading-tight">{clampText(devicesUi.systemDump.uuid, 18)}</div>
+                  <div className="mt-1 font-mono text-[12px] text-black/55">{devicesUi.systemDump.host}</div>
                 </div>
-                <Button tone="ink" onClick={() => setSystemDump(null)}>
+                <Button tone="ink" onClick={() => app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })}>
                   Close
                 </Button>
               </div>
               <div className="px-5 py-5">
                 <pre className="max-h-[55vh] overflow-auto rounded-2xl border border-black/10 bg-white/60 p-4 font-mono text-[12px] leading-relaxed text-black/80">
-                  {JSON.stringify(systemDump.data, null, 2)}
+                  {JSON.stringify(devicesUi.systemDump.data, null, 2)}
                 </pre>
               </div>
             </div>
@@ -654,22 +492,24 @@ const DevicesCard = (props: {
   )
 }
 
-const SettingsCard = (props: {
-  status: StatusResponse | null
-  cloud: CloudSummary | null
-  onToast: (t: any) => void
-}) => {
+const SettingsCard = () => {
+  const app = useAppActorRef()
+  const status = useAppSelector((s) => s.context.status)
+  const cloud = useAppSelector((s) => s.context.cloud)
+
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      props.onToast({ kind: 'ok', title: 'Copied to clipboard' })
+      app.send({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Copied to clipboard' } })
     } catch (e) {
-      props.onToast({ kind: 'err', title: 'Copy failed', detail: e instanceof Error ? e.message : String(e) })
+      app.send({
+        type: 'TOAST.SHOW',
+        toast: { kind: 'err', title: 'Copy failed', detail: e instanceof Error ? e.message : String(e) },
+      })
     }
   }
 
-  const cloud = props.cloud
-  const cfg = props.status?.config
+  const cfg = status?.config
 
   return (
     <Card title="Settings" kicker="notes">

@@ -12,11 +12,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "bun-plugin-tailwind": "^0.1.2",
     "@merossity/core": "workspace:*",
+    "@xstate/react": "^6.0.0",
+    "bun-plugin-tailwind": "^0.1.2",
     "react": "^19",
     "react-dom": "^19",
-    "tailwindcss": "^4.1.11"
+    "tailwindcss": "^4.1.11",
+    "xstate": "^5.26.0"
   },
   "devDependencies": {
     "@merossity/qa": "workspace:*",
