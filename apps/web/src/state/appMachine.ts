@@ -4,7 +4,7 @@ import type { Tab } from '../lib/nav'
 import { setHashTab } from '../lib/nav'
 import type { CloudSummary, MerossCloudDevice, StatusResponse } from '../lib/types'
 
-export type HostsMap = Record<string, { host: string; updatedAt: string }>
+export type HostsMap = Record<string, { host: string; updatedAt: string; mac?: string }>
 
 export type ToastData = {
   kind: 'ok' | 'err'
@@ -66,6 +66,7 @@ type AppEvent =
   | { type: 'DEVICES.TOGGLE_EXPANDED'; uuid: string }
   | { type: 'DEVICES.CLOSE_SYSTEM_DUMP' }
   | { type: 'DEVICES.REFRESH_FROM_CLOUD' }
+  | { type: 'DEVICES.DISCOVER_HOSTS' }
   | { type: 'DEVICES.RESOLVE_HOST'; uuid: string; mac: string; title: string }
   | { type: 'DEVICES.TOGGLE'; uuid: string; onoff: 0 | 1 }
   | { type: 'DEVICES.SYSTEM_SNAPSHOT'; uuid: string }
@@ -204,13 +205,21 @@ export const appMachine = setup({
     }),
 
     resolveHost: fromPromise(async ({ input }: { input: { uuid: string; mac: string; cidr: string; title: string } }) => {
-      const res = await apiPost<{ uuid: string; host: string }>('/api/hosts/resolve', {
+      const res = await apiPost<{ uuid: string; host: string; mac?: string }>('/api/hosts/resolve', {
         uuid: input.uuid,
         mac: input.mac,
         cidr: input.cidr.trim() || undefined,
       })
       const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
       return { title: input.title, resolved: res, hosts: hostsRes.hosts }
+    }),
+
+    discoverHosts: fromPromise(async ({ input }: { input: { cidr: string } }) => {
+      const res = await apiPost<{ cidr: string; count: number; hosts: HostsMap }>('/api/hosts/discover', {
+        cidr: input.cidr.trim() || undefined,
+      })
+      const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
+      return { ...res, hostsAll: hostsRes.hosts }
     }),
 
     toggleLan: fromPromise(async ({ input }: { input: { uuid: string; onoff: 0 | 1 } }) => {
@@ -306,25 +315,8 @@ export const appMachine = setup({
                 }),
               },
             ],
-            'DEVICES.RESOLVE_HOST': [
-              {
-                guard: ({ event }) => {
-                  assertEvent(event, 'DEVICES.RESOLVE_HOST')
-                  return Boolean(event.mac.trim())
-                },
-                target: 'resolvingHost',
-              },
-              {
-                actions: raise({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'Missing MAC address',
-                    detail: 'Device entry did not include mac/macAddress. Try a fresh device list.',
-                  },
-                }),
-              },
-            ],
+            'DEVICES.DISCOVER_HOSTS': { target: 'discoveringHosts' },
+            'DEVICES.RESOLVE_HOST': { target: 'resolvingHost' },
             'DEVICES.TOGGLE': [
               {
                 guard: ({ context, event }) => {
@@ -472,6 +464,46 @@ export const appMachine = setup({
                   toast: {
                     kind: 'err',
                     title: 'Refresh failed',
+                    detail: event.error instanceof Error ? event.error.message : String(event.error),
+                  },
+                })),
+              ],
+            },
+          },
+        },
+
+        discoveringHosts: {
+          entry: [
+            { type: 'persistCidr' },
+            { type: 'setBusy', params: () => ({ busy: 'discover_hosts' }) },
+          ],
+          invoke: {
+            src: 'discoverHosts',
+            input: ({ context }) => ({ cidr: context.devicesUi.cidr }),
+            onDone: {
+              target: 'idle',
+              actions: [
+                { type: 'setBusy', params: () => ({ busy: null }) },
+                { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hostsAll }) },
+                raise(({ event }) => ({
+                  type: 'TOAST.SHOW',
+                  toast: {
+                    kind: 'ok',
+                    title: 'LAN discovery complete',
+                    detail: `${event.output.count} devices found (${event.output.cidr}).`,
+                  },
+                })),
+              ],
+            },
+            onError: {
+              target: 'idle',
+              actions: [
+                { type: 'setBusy', params: () => ({ busy: null }) },
+                raise(({ event }) => ({
+                  type: 'TOAST.SHOW',
+                  toast: {
+                    kind: 'err',
+                    title: 'LAN discovery failed',
                     detail: event.error instanceof Error ? event.error.message : String(event.error),
                   },
                 })),

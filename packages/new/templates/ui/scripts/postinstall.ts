@@ -5,7 +5,7 @@ import path from 'node:path'
 
 const ROOT_DIR = path.resolve(import.meta.dir, '../../..')
 const APPS_DIR = path.join(ROOT_DIR, 'apps')
-const DEFAULT_UI_DEP = '@bun-monorepo-template/ui'
+const DEFAULT_UI_DEP = '@merossity/ui'
 
 const readJson = async <T>(filePath: string): Promise<T> => {
   const contents = await readFile(filePath, 'utf8')

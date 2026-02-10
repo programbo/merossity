@@ -42,3 +42,23 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Control sockets
 *.sock
+
+# Playwright CLI artifacts (local debugging output)
+.playwright-cli/
+
+# Local UI snapshots/screenshots created during agent-driven UI verification
+codex-ui.png
+codex-ui.yaml
+devices-with-discover.png
+devices-after-fix.png
+devices-after-fix.yaml
+devices-after-refresh.png
+devices-after-refresh.yaml
+devices-click.yaml
+postfix-devices.yaml
+ui-connect.png
+ui-connect.yaml
+ui-devices.png
+ui-devices.yaml
+ui-settings.png
+ui-settings.yaml

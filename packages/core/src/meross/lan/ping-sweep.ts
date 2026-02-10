@@ -24,7 +24,7 @@ export const parseCidr = (cidr: string): { network: number; broadcast: number; p
   return { network, broadcast, prefix }
 }
 
-const listHosts = (cidr: string): string[] => {
+export const listHostsInCidr = (cidr: string): string[] => {
   const { network, broadcast, prefix } = parseCidr(cidr)
   if (prefix >= 31) return []
 
@@ -53,7 +53,7 @@ export type PingSweepOptions = {
 export const pingSweep = async (cidr: string, options: PingSweepOptions = {}): Promise<void> => {
   const timeoutMs = options.timeoutMs ?? 200
   const concurrency = Math.max(1, options.concurrency ?? 64)
-  const ips = listHosts(cidr)
+  const ips = listHostsInCidr(cidr)
   if (ips.length === 0) return
 
   let i = 0

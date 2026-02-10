@@ -1,8 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { Box, Text, useApp, useInput } from "ink";
-import { withFullScreen } from "fullscreen-ink";
+import { Box, Text, render, useApp, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadMerossCloudDumpFile, type MerossCloudDumpDevice } from "@merossity/core/meross";
@@ -103,7 +102,8 @@ function App() {
 }
 
 export const runTui = async () => {
-  const ink = withFullScreen(<App />);
-  await ink.start();
-  await ink.waitUntilExit();
+  // `fullscreen-ink` currently crashes under Bun due to a React internals mismatch
+  // in `react-reconciler`. Plain Ink render works reliably.
+  const { waitUntilExit } = render(<App />);
+  await waitUntilExit();
 };

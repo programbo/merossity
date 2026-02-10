@@ -8,10 +8,11 @@ describe('meross/cloud signing', () => {
     let sawPassword = ''
 
     // Fake cloud server: just decode params and inspect.
-    const server = Bun.serve({
+    let server: ReturnType<typeof Bun.serve>
+    server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
-      async fetch(req) {
+      async fetch(req: Request): Promise<Response> {
         const bodyText = await req.text()
         const sp = new URLSearchParams(bodyText)
         const paramsB64 = sp.get('params') ?? ''

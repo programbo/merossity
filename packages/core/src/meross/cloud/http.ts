@@ -19,6 +19,9 @@ export type MerossCloudHttpOptions = {
   // Override initial domain if you already know it (otherwise defaults to iotx.meross.com).
   domain?: string
   scheme?: 'https' | 'http'
+  // Meross supports an encrypted payload mode. This client does not implement it yet,
+  // so default to plaintext.
+  encryption?: 0 | 1
 }
 
 type LoginResult = {
@@ -136,8 +139,9 @@ export const merossCloudLogin = async (params: LoginParams, options: MerossCloud
     password: passwordHash,
     accountCountryCode: '',
     agree: 1,
-    // Many clients set encryption=1 even if they don't implement encrypted payloads.
-    encryption: 1,
+    // If the server honors encryption=1, responses may be encrypted. We currently do
+    // not implement decryption, so prefer plaintext by default.
+    encryption: options.encryption ?? 0,
     mobileInfo: deviceInfo,
   }
   if (params.mfaCode) signInParams.mfaCode = params.mfaCode
@@ -206,9 +210,68 @@ export const merossCloudListDevices = async (
     throw new MerossCloudError('Cloud devList failed', resp.apiStatus, resp.info)
   }
 
-  const devList = (resp.data as any)?.devList
-  if (!Array.isArray(devList)) {
-    throw new MerossCloudError('Cloud devList response missing devList[]')
+  const devList = extractCloudDeviceList(resp.data)
+  if (!devList) {
+    const data: any = resp.data as any
+    const dataType = data === null ? 'null' : Array.isArray(data) ? 'array' : typeof data
+    const keys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).slice(0, 20) : []
+
+    // Keep the original error string for compatibility, but add enough metadata to debug.
+    throw new MerossCloudError(
+      `Cloud devList response missing devList[] (dataType=${dataType}${keys.length ? ` keys=${keys.join(',')}` : ''})`,
+    )
   }
-  return devList as MerossCloudDevice[]
+  return devList
+}
+
+const isDeviceLike = (v: any): v is MerossCloudDevice => Boolean(v && typeof v === 'object' && typeof v.uuid === 'string')
+
+const coerceJson = (v: unknown): unknown => {
+  if (typeof v !== 'string') return v
+  const s = v.trim()
+  if (!s) return v
+  if (!(s.startsWith('{') || s.startsWith('['))) return v
+  try {
+    return JSON.parse(s)
+  } catch {
+    return v
+  }
+}
+
+const isDeviceList = (v: unknown): v is MerossCloudDevice[] => {
+  if (!Array.isArray(v)) return false
+  if (v.length === 0) return true
+  return isDeviceLike(v[0])
+}
+
+const extractCloudDeviceList = (data: unknown): MerossCloudDevice[] | null => {
+  const coerced = coerceJson(data)
+
+  if (isDeviceList(coerced)) return coerced
+
+  if (!coerced || typeof coerced !== 'object') return null
+
+  const obj: any = coerced as any
+  const candidates = [
+    obj.devList,
+    obj.deviceList,
+    obj.list,
+    obj.devices,
+    obj.data?.devList,
+    obj.data?.deviceList,
+    obj.data?.list,
+    obj.payload ? coerceJson(obj.payload) : undefined,
+  ].map(coerceJson)
+
+  for (const c of candidates) {
+    if (isDeviceList(c)) return c
+    if (c && typeof c === 'object') {
+      const nested: any = c as any
+      if (isDeviceList(nested.devList)) return nested.devList
+      if (isDeviceList(nested.list)) return nested.list
+      if (isDeviceList(nested.devices)) return nested.devices
+    }
+  }
+
+  return null
 }

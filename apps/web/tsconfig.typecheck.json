@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      // Workspaces install React 18 (CLI) and React 19 (web). Force tsc to use
+      // the web app's local React type declarations so ReactNode is consistent.
+      //
+      // IMPORTANT: this file is for typechecking only. Do not use it for Bun runtime,
+      // since Bun reads tsconfig "paths" for module resolution and would attempt to
+      // load these .d.ts files at runtime.
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"]
+    }
+  }
+}
+

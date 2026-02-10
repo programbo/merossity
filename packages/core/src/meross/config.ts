@@ -3,7 +3,14 @@ import path from 'node:path'
 
 import type { MerossCloudCredentials, MerossCloudDevice } from './cloud'
 
-export type MerossDeviceHostMap = Record<string, { host: string; updatedAt: string }>
+export type MerossDeviceHostMap = Record<
+  string,
+  {
+    host: string
+    updatedAt: string
+    mac?: string
+  }
+>
 
 export type MerossConfig = {
   cloud?: (MerossCloudCredentials & { updatedAt: string })
