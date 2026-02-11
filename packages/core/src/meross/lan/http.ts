@@ -40,4 +40,3 @@ export const postConfig = async <TResponse = unknown>(
     clearTimeout(timeout)
   }
 }
-

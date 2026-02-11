@@ -21,4 +21,3 @@ export const getSystemAll = async <TResponse = unknown>(
   })
   return await postConfig<TResponse>(options.host, msg, { ...postOptions, timeoutMs: options.timeoutMs })
 }
-

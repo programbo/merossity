@@ -21,4 +21,3 @@ describe('meross/lan buildLanMessage', () => {
     expect(msg.header.sign).toBe(md5Hex(`${messageId}${key}${timestamp}`))
   })
 })
-

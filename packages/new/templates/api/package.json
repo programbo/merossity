@@ -9,7 +9,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "hono": "^4"
+    "@orpc/server": "next",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/bun": "latest",

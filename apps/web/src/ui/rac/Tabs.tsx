@@ -10,7 +10,6 @@ import {
   type TabsProps,
   composeRenderProps,
 } from 'react-aria-components'
-
 import { cls } from '../cls'
 
 export function Tabs(props: TabsProps) {
@@ -18,9 +17,7 @@ export function Tabs(props: TabsProps) {
 }
 
 export function TabList(props: React.ComponentProps<typeof RACTabList>) {
-  return (
-    <RACTabList {...props} className={composeRenderProps(props.className, (c) => cls('rac-tabList', c))} />
-  )
+  return <RACTabList {...props} className={composeRenderProps(props.className, (c) => cls('rac-tabList', c))} />
 }
 
 export function Tab(props: TabProps) {

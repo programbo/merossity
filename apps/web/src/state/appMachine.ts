@@ -180,13 +180,10 @@ export const appMachine = setup({
 
       const status = await safe(() => apiGet<StatusResponse>('/api/status'), null)
       const [cloud, devicesRes, hostsRes] = await Promise.all([
-        safe(
-          async () => {
-            const res = await apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
-            return res.cloud
-          },
-          null,
-        ),
+        safe(async () => {
+          const res = await apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
+          return res.cloud
+        }, null),
         safe(() => apiGet<{ updatedAt: string | null; list: MerossCloudDevice[] }>('/api/cloud/devices'), {
           updatedAt: null,
           list: [],
@@ -197,30 +194,32 @@ export const appMachine = setup({
       return { status, cloud, devices: devicesRes.list, hosts: hostsRes.hosts }
     }),
 
-    loginFlow: fromPromise(async ({ input }: { input: { useEnv: boolean; email: string; password: string; totp: string } }) => {
-      const body: any = {}
+    loginFlow: fromPromise(
+      async ({ input }: { input: { useEnv: boolean; email: string; password: string; totp: string } }) => {
+        const body: any = {}
 
-      if (!input.useEnv) {
-        body.email = input.email.trim()
-        body.password = input.password
-      } else {
-        // Allow overrides while defaulting to env creds on the server.
-        if (input.email.trim()) body.email = input.email.trim()
-        if (input.password) body.password = input.password
-      }
+        if (!input.useEnv) {
+          body.email = input.email.trim()
+          body.password = input.password
+        } else {
+          // Allow overrides while defaulting to env creds on the server.
+          if (input.email.trim()) body.email = input.email.trim()
+          if (input.password) body.password = input.password
+        }
 
-      // Always sent (UI requires it). If the account doesn't use MFA, the cloud should ignore it.
-      body.mfaCode = input.totp.trim()
+        // Always sent (UI requires it). If the account doesn't use MFA, the cloud should ignore it.
+        body.mfaCode = input.totp.trim()
 
-      const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
-      const [status, cloud] = await Promise.all([
-        apiGet<StatusResponse>('/api/status'),
-        apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
-          .then((r) => r.cloud)
-          .catch(() => null),
-      ])
-      return { status, cloud, resCloud: res.cloud }
-    }),
+        const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
+        const [status, cloud] = await Promise.all([
+          apiGet<StatusResponse>('/api/status'),
+          apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
+            .then((r) => r.cloud)
+            .catch(() => null),
+        ])
+        return { status, cloud, resCloud: res.cloud }
+      },
+    ),
 
     refreshDevicesFromCloud: fromPromise(async () => {
       return await apiPost<{ count: number; list: MerossCloudDevice[] }>('/api/cloud/devices/refresh', {})
@@ -230,15 +229,17 @@ export const appMachine = setup({
       return await apiGet<{ suggestions: Array<{ cidr: string }>; default: string | null }>('/api/lan/cidr-suggest')
     }),
 
-    resolveHost: fromPromise(async ({ input }: { input: { uuid: string; mac: string; cidr: string; title: string } }) => {
-      const res = await apiPost<{ uuid: string; host: string; mac?: string }>('/api/hosts/resolve', {
-        uuid: input.uuid,
-        mac: input.mac,
-        cidr: input.cidr.trim() || undefined,
-      })
-      const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
-      return { title: input.title, resolved: res, hosts: hostsRes.hosts }
-    }),
+    resolveHost: fromPromise(
+      async ({ input }: { input: { uuid: string; mac: string; cidr: string; title: string } }) => {
+        const res = await apiPost<{ uuid: string; host: string; mac?: string }>('/api/hosts/resolve', {
+          uuid: input.uuid,
+          mac: input.mac,
+          cidr: input.cidr.trim() || undefined,
+        })
+        const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
+        return { title: input.title, resolved: res, hosts: hostsRes.hosts }
+      },
+    ),
 
     discoverHosts: fromPromise(async ({ input }: { input: { cidr: string } }) => {
       const res = await apiPost<{ cidr: string; count: number; hosts: HostsMap }>('/api/hosts/discover', {
@@ -249,12 +250,12 @@ export const appMachine = setup({
     }),
 
     toggleLan: fromPromise(async ({ input }: { input: { uuid: string; onoff: 0 | 1 } }) => {
-      await apiPost('/api/lan/toggle', { uuid: input.uuid, channel: 0, onoff: input.onoff })
+      await apiPost('/api/device/toggle', { uuid: input.uuid, channel: 0, onoff: input.onoff })
       return { uuid: input.uuid, onoff: input.onoff }
     }),
 
     systemSnapshot: fromPromise(async ({ input }: { input: { uuid: string } }) => {
-      const res = await apiPost<{ host: string; data: unknown }>('/api/lan/system-all', { uuid: input.uuid })
+      const res = await apiPost<{ host: string; data: unknown }>('/api/device/system-all', { uuid: input.uuid })
       return { uuid: input.uuid, host: res.host, data: res.data }
     }),
   },
@@ -324,10 +325,7 @@ export const appMachine = setup({
           initial: 'deciding',
           states: {
             deciding: {
-              always: [
-                { guard: 'isCloudLinked', target: 'hasCloudKey' },
-                { target: 'needsCloudKey.editing' },
-              ],
+              always: [{ guard: 'isCloudLinked', target: 'hasCloudKey' }, { target: 'needsCloudKey.editing' }],
             },
 
             needsCloudKey: {
@@ -361,7 +359,11 @@ export const appMachine = setup({
                         { type: 'setCloud', params: ({ event }) => ({ cloud: event.output.cloud }) },
                         raise(({ event }) => ({
                           type: 'TOAST.SHOW',
-                          toast: { kind: 'ok', title: 'Cloud linked', detail: `Domain: ${event.output.resCloud.domain}` },
+                          toast: {
+                            kind: 'ok',
+                            title: 'Cloud linked',
+                            detail: `Domain: ${event.output.resCloud.domain}`,
+                          },
                         })),
                       ],
                     },
@@ -379,7 +381,11 @@ export const appMachine = setup({
                           }
                           return {
                             type: 'TOAST.SHOW',
-                            toast: { kind: 'err', title: 'Login failed', detail: e instanceof Error ? e.message : String(e) },
+                            toast: {
+                              kind: 'err',
+                              title: 'Login failed',
+                              detail: e instanceof Error ? e.message : String(e),
+                            },
                           }
                         }),
                       ],
@@ -412,7 +418,11 @@ export const appMachine = setup({
                             { type: 'setDevices', params: ({ event }) => ({ devices: event.output.list }) },
                             raise(({ event }) => ({
                               type: 'TOAST.SHOW',
-                              toast: { kind: 'ok', title: 'Devices updated', detail: `${event.output.count} devices from cloud.` },
+                              toast: {
+                                kind: 'ok',
+                                title: 'Devices updated',
+                                detail: `${event.output.count} devices from cloud.`,
+                              },
                             })),
                           ],
                         },
@@ -567,7 +577,11 @@ export const appMachine = setup({
                             { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hosts }) },
                             raise(({ event }) => ({
                               type: 'TOAST.SHOW',
-                              toast: { kind: 'ok', title: 'IP found', detail: `${event.output.title}: ${event.output.resolved.host}` },
+                              toast: {
+                                kind: 'ok',
+                                title: 'IP found',
+                                detail: `${event.output.title}: ${event.output.resolved.host}`,
+                              },
                             })),
                           ],
                         },
@@ -654,7 +668,11 @@ export const appMachine = setup({
                             {
                               type: 'setSystemDump',
                               params: ({ event }) => ({
-                                systemDump: { uuid: event.output.uuid, host: event.output.host, data: event.output.data },
+                                systemDump: {
+                                  uuid: event.output.uuid,
+                                  host: event.output.host,
+                                  data: event.output.data,
+                                },
                               }),
                             },
                             raise(({ event }) => ({

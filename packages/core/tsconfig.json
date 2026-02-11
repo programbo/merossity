@@ -1,6 +1,7 @@
 {
   "extends": "@merossity/qa/tsconfig/node",
   "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
     "paths": {
       "@/*": ["./src/*"]
     }

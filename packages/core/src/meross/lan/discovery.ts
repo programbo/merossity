@@ -1,8 +1,7 @@
 import os from 'node:os'
-
-import { getSystemAll } from './system-all'
-import { listHostsInCidr } from './ping-sweep'
 import { normalizeMac } from './mac'
+import { listHostsInCidr } from './ping-sweep'
+import { getSystemAll } from './system-all'
 
 const ipToInt = (ip: string): number => {
   const parts = ip.split('.').map((p) => Number.parseInt(p, 10))
@@ -13,8 +12,7 @@ const ipToInt = (ip: string): number => {
   return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0
 }
 
-const intToIp = (n: number): string =>
-  `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`
+const intToIp = (n: number): string => `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`
 
 const netmaskToPrefix = (mask: string): number => {
   const n = ipToInt(mask)
@@ -171,4 +169,3 @@ export const resolveHostByUuidScan = async (
   await Promise.all(workers)
   return found
 }
-

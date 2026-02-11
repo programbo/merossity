@@ -1,7 +1,6 @@
 'use client'
 
 import { Switch as RACSwitch, type SwitchProps as RACSwitchProps, composeRenderProps } from 'react-aria-components'
-
 import { cls } from '../cls'
 
 export type SwitchProps = Omit<RACSwitchProps, 'children'> & {
@@ -26,4 +25,3 @@ export function Switch({ label, description, ...props }: SwitchProps) {
     </RACSwitch>
   )
 }
-

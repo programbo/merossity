@@ -40,4 +40,3 @@ export class MerossCloudError extends Error {
     super(message)
   }
 }
-

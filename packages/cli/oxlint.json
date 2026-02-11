@@ -1,6 +1,4 @@
 {
   "$schema": "../../node_modules/oxlint/configuration_schema.json",
-  "extends": [
-    "@merossity/qa/oxlint"
-  ]
+  "extends": ["@merossity/qa/oxlint"]
 }

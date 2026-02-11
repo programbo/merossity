@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'bun:test'
 import crypto from 'node:crypto'
-
+import { describe, expect, it } from 'bun:test'
 import { merossCloudLogin } from '../../../src/meross/cloud/http'
 
 describe('meross/cloud signing', () => {

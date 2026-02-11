@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Heading } from 'react-aria-components'
 import { groupDevicesForControl } from '@merossity/core/meross/inventory'
+import { Heading } from 'react-aria-components'
 import './index.css'
 import { apiPost } from './lib/api'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
@@ -44,7 +44,9 @@ function RefreshIcon(props: { className?: string }) {
 }
 
 const friendlyDeviceTypeFromModel = (model: string) => {
-  const m = String(model ?? '').trim().toUpperCase()
+  const m = String(model ?? '')
+    .trim()
+    .toUpperCase()
   if (!m) return ''
 
   if (m.startsWith('MSS')) return 'Smart Wi-Fi Plug'
@@ -221,7 +223,13 @@ function InventoryView() {
       )
       setLanState((prev) => ({
         ...prev,
-        [uuid]: { host: res.host, channel: res.channel, onoff: res.onoff, channels: res.channels, updatedAt: Date.now() },
+        [uuid]: {
+          host: res.host,
+          channel: res.channel,
+          onoff: res.onoff,
+          channels: res.channels,
+          updatedAt: Date.now(),
+        },
       }))
       setLanErr((prev) => {
         if (!prev[uuid]) return prev
@@ -351,7 +359,7 @@ function InventoryView() {
             <div className="panel__headActions">
               <Button
                 tone="quiet"
-                className={`is-iconOnly reloadButton${reloadBusy ? ' is-busy' : ''}`}
+                className={`is-iconOnly reloadButton${reloadBusy ? 'is-busy' : ''}`}
                 aria-label="Reload devices (refresh + scan LAN)"
                 onPress={() => {
                   app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })
@@ -368,7 +376,9 @@ function InventoryView() {
               <div className="callout mt-4">
                 <div>
                   <div className="callout__title">Scanning LAN</div>
-                  <div className="callout__copy">Looking up IPs. Devices with a known IP remain controllable while the scan runs.</div>
+                  <div className="callout__copy">
+                    Looking up IPs. Devices with a known IP remain controllable while the scan runs.
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -468,8 +478,19 @@ function DeviceGroup(props: {
   onRefreshLanState: (uuid: string) => Promise<void>
   onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
 }) {
-  const { title, count, devices, hosts, uuids, lanState, lanErr, toggleBusy, refreshLanCount, onRefreshLanState, onToggleLan } =
-    props
+  const {
+    title,
+    count,
+    devices,
+    hosts,
+    uuids,
+    lanState,
+    lanErr,
+    toggleBusy,
+    refreshLanCount,
+    onRefreshLanState,
+    onToggleLan,
+  } = props
   const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
 
   return (
@@ -521,11 +542,7 @@ function DeviceRow(props: {
 
   const online = String(d.onlineStatus ?? '').toLowerCase()
   const onlineTone =
-    online.includes('online') || online === '1'
-      ? 'ok'
-      : online.includes('offline') || online === '0'
-        ? 'err'
-        : 'muted'
+    online.includes('online') || online === '1' ? 'ok' : online.includes('offline') || online === '0' ? 'err' : 'muted'
 
   const title = String(d.devName ?? '') || uuid
   const model = String(d.deviceType ?? '').trim()
@@ -549,14 +566,13 @@ function DeviceRow(props: {
   const togglable = ready && prefersToggleFor(d)
   const toggleDisabled = !ready || props.isToggling
 
-  const lanDesc =
-    !ready
-      ? 'Find IP to query'
-      : props.lanError
-        ? `state error: ${props.lanError}`
-        : l
-          ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
-          : 'state unknown'
+  const lanDesc = !ready
+    ? 'Find IP to query'
+    : props.lanError
+      ? `state error: ${props.lanError}`
+      : l
+        ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
+        : 'state unknown'
 
   return (
     <article className={powerClass ? `device ${powerClass}` : 'device'}>
@@ -570,7 +586,8 @@ function DeviceRow(props: {
           <div className="device__subtitle">{subtitle || 'device'}</div>
           <div className="device__facts">
             <div>
-              <span className="device__factKey">ip</span> <span className="device__factVal">{host ? host : '(unknown)'}</span>
+              <span className="device__factKey">ip</span>{' '}
+              <span className="device__factVal">{host ? host : '(unknown)'}</span>
             </div>
           </div>
         </div>
@@ -656,7 +673,8 @@ function DeviceRow(props: {
             ) : null}
             {hostUpdatedAt ? (
               <div>
-                <span className="device__factKey">ip seen</span> <span className="device__factVal">{hostUpdatedAt}</span>
+                <span className="device__factKey">ip seen</span>{' '}
+                <span className="device__factVal">{hostUpdatedAt}</span>
               </div>
             ) : null}
           </div>

@@ -78,21 +78,9 @@ describe('@merossity/new scaffolds', () => {
       TMP: bunTmpDir,
       BUN_NEW_WEB_TEMPLATE: '1',
     }
-    await run(
-      ['run', 'packages/new/index.ts', 'web', path.relative(REPO_ROOT, webDir), '--no-install'],
-      REPO_ROOT,
-      env,
-    )
-    await run(
-      ['run', 'packages/new/index.ts', 'api', path.relative(REPO_ROOT, apiDir), '--no-install'],
-      REPO_ROOT,
-      env,
-    )
-    await run(
-      ['run', 'packages/new/index.ts', 'cli', path.relative(REPO_ROOT, cliDir), '--no-install'],
-      REPO_ROOT,
-      env,
-    )
+    await run(['run', 'packages/new/index.ts', 'web', path.relative(REPO_ROOT, webDir), '--no-install'], REPO_ROOT, env)
+    await run(['run', 'packages/new/index.ts', 'api', path.relative(REPO_ROOT, apiDir), '--no-install'], REPO_ROOT, env)
+    await run(['run', 'packages/new/index.ts', 'cli', path.relative(REPO_ROOT, cliDir), '--no-install'], REPO_ROOT, env)
     await run(
       ['run', 'packages/new/index.ts', 'cli', path.relative(REPO_ROOT, cliInkDir), '--no-install', '--tui'],
       REPO_ROOT,
@@ -110,16 +98,8 @@ describe('@merossity/new scaffolds', () => {
       REPO_ROOT,
       env,
     )
-    await run(
-      ['run', 'packages/new/index.ts', 'lib', path.relative(REPO_ROOT, libDir), '--no-install'],
-      REPO_ROOT,
-      env,
-    )
-    await run(
-      ['run', 'packages/new/index.ts', 'ui', path.relative(REPO_ROOT, uiDir), '--no-install'],
-      REPO_ROOT,
-      env,
-    )
+    await run(['run', 'packages/new/index.ts', 'lib', path.relative(REPO_ROOT, libDir), '--no-install'], REPO_ROOT, env)
+    await run(['run', 'packages/new/index.ts', 'ui', path.relative(REPO_ROOT, uiDir), '--no-install'], REPO_ROOT, env)
   })
 
   afterAll(async () => {
@@ -192,9 +172,7 @@ describe('@merossity/new scaffolds', () => {
       expect(devDependencies['@merossity/qa']).toBeDefined()
 
       const prettierConfig = await readFile(path.join(dir, 'prettier.config.cjs'), 'utf8')
-      const expectedPrettier = tailwind
-        ? '@merossity/qa/prettier-tailwind'
-        : '@merossity/qa/prettier'
+      const expectedPrettier = tailwind ? '@merossity/qa/prettier-tailwind' : '@merossity/qa/prettier'
       expect(prettierConfig).toContain(expectedPrettier)
 
       const oxlint = await readJson(path.join(dir, 'oxlint.json'))

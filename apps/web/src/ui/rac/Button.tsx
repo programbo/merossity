@@ -1,7 +1,6 @@
 'use client'
 
 import { Button as RACButton, type ButtonProps as RACButtonProps, composeRenderProps } from 'react-aria-components'
-
 import { cls } from '../cls'
 
 export type ButtonTone = 'primary' | 'ghost' | 'danger' | 'quiet'
@@ -29,4 +28,3 @@ export function Button({ tone = 'ghost', icon, ...props }: ButtonProps) {
     </RACButton>
   )
 }
-

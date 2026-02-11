@@ -1,7 +1,12 @@
 'use client'
 
-import { Dialog, Modal as RACModal, ModalOverlay, type ModalOverlayProps, composeRenderProps } from 'react-aria-components'
-
+import {
+  Dialog,
+  Modal as RACModal,
+  ModalOverlay,
+  type ModalOverlayProps,
+  composeRenderProps,
+} from 'react-aria-components'
 import { cls } from '../cls'
 
 export function Modal(props: ModalOverlayProps & { children: React.ReactNode }) {
@@ -18,4 +23,3 @@ export function Modal(props: ModalOverlayProps & { children: React.ReactNode }) 
     </ModalOverlay>
   )
 }
-

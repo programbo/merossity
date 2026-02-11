@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test'
-
 import { groupDevicesForControl } from '../../../src/meross/inventory'
 
 describe('groupDevicesForControl', () => {
@@ -26,4 +25,3 @@ describe('groupDevicesForControl', () => {
     expect(inaccessible.map((d) => d.uuid)).toEqual(['u4', 'u3'])
   })
 })
-

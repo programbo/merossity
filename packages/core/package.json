@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./string": "./src/string/index.ts",
-    "./date": "./src/date/index.ts",
+    "./api": "./src/api/index.ts",
+    "./lib": "./src/lib/index.ts",
     "./meross": "./src/meross/index.ts",
     "./meross/inventory": "./src/meross/inventory.ts"
   },

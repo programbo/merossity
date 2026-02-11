@@ -7,8 +7,7 @@ const ipToInt = (ip: string): number => {
   return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0
 }
 
-const intToIp = (n: number): string =>
-  `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`
+const intToIp = (n: number): string => `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`
 
 export const parseCidr = (cidr: string): { network: number; broadcast: number; prefix: number } => {
   const [ip, prefixStr] = cidr.split('/')

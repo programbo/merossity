@@ -1,5 +1,4 @@
 import crypto from 'node:crypto'
-
 import type { MerossCloudApiResponse, MerossCloudCredentials, MerossCloudDevice } from './types'
 import { MerossCloudError } from './types'
 
@@ -119,7 +118,10 @@ const postWithRedirect = async <TData>(
   return { domain, resp }
 }
 
-export const merossCloudLogin = async (params: LoginParams, options: MerossCloudHttpOptions = {}): Promise<LoginResult> => {
+export const merossCloudLogin = async (
+  params: LoginParams,
+  options: MerossCloudHttpOptions = {},
+): Promise<LoginResult> => {
   const fetchImpl = options.fetch ?? fetch
   const timeoutMs = options.timeoutMs ?? 15000
   const domain = stripScheme(options.domain ?? DEFAULT_DOMAIN)
@@ -224,7 +226,8 @@ export const merossCloudListDevices = async (
   return devList
 }
 
-const isDeviceLike = (v: any): v is MerossCloudDevice => Boolean(v && typeof v === 'object' && typeof v.uuid === 'string')
+const isDeviceLike = (v: any): v is MerossCloudDevice =>
+  Boolean(v && typeof v === 'object' && typeof v.uuid === 'string')
 
 const coerceJson = (v: unknown): unknown => {
   if (typeof v !== 'string') return v

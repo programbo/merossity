@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test'
-
 import { extractLanMac, extractLanUuid } from '../../../src/meross/lan/discovery'
 
 describe('LAN discovery helpers', () => {
@@ -13,4 +12,3 @@ describe('LAN discovery helpers', () => {
     expect(extractLanMac(resp)).toBe('c4:e7:ae:1a:c4:74')
   })
 })
-

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test'
 import { createActor, fromPromise, waitFor } from 'xstate'
-
 import { appMachine } from './appMachine'
 
 const STATUS_OK = {
@@ -18,12 +17,12 @@ describe('appMachine', () => {
   it('boots into needsCloudKey when no cloud creds exist', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: (fromPromise(async () => ({
+        bootstrap: fromPromise(async () => ({
           status: STATUS_OK,
           cloud: null,
           devices: [],
           hosts: {},
-        })) as any),
+        })) as any,
       },
     })
 
@@ -36,12 +35,12 @@ describe('appMachine', () => {
   it('requires a 6-digit TOTP before submitting', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: (fromPromise(async () => ({
+        bootstrap: fromPromise(async () => ({
           status: STATUS_OK,
           cloud: null,
           devices: [],
           hosts: {},
-        })) as any),
+        })) as any,
       },
     })
 
@@ -61,13 +60,13 @@ describe('appMachine', () => {
   it('after successful login, hydrates inventory then enters idle', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: (fromPromise(async () => ({
+        bootstrap: fromPromise(async () => ({
           status: STATUS_OK,
           cloud: null,
           devices: [],
           hosts: {},
-        })) as any),
-        loginFlow: (fromPromise(async () => ({
+        })) as any,
+        loginFlow: fromPromise(async () => ({
           status: STATUS_OK,
           cloud: {
             domain: 'iotx.meross.com',
@@ -83,10 +82,10 @@ describe('appMachine', () => {
             key: 'k',
             tokenRedacted: 't',
           },
-        })) as any),
-        refreshDevicesFromCloud: (fromPromise(async () => ({ count: 0, list: [] })) as any),
-        cidrSuggest: (fromPromise(async () => ({ suggestions: [], default: '192.168.0.0/24' })) as any),
-        discoverHosts: (fromPromise(async () => ({ cidr: '192.168.0.0/24', count: 0, hosts: {}, hostsAll: {} })) as any),
+        })) as any,
+        refreshDevicesFromCloud: fromPromise(async () => ({ count: 0, list: [] })) as any,
+        cidrSuggest: fromPromise(async () => ({ suggestions: [], default: '192.168.0.0/24' })) as any,
+        discoverHosts: fromPromise(async () => ({ cidr: '192.168.0.0/24', count: 0, hosts: {}, hostsAll: {} })) as any,
       },
     })
 

@@ -9,7 +9,6 @@ import {
   type TextFieldProps as RACTextFieldProps,
   composeRenderProps,
 } from 'react-aria-components'
-
 import { cls } from '../cls'
 
 export type TextFieldProps = RACTextFieldProps & {

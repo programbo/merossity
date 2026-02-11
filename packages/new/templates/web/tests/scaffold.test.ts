@@ -1,5 +1,5 @@
-import path from 'node:path'
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'bun:test'
 
 const ROOT_DIR = path.resolve(import.meta.dir, '..')
@@ -43,8 +43,7 @@ describe('scaffolded app', () => {
 
   testIt('writes QA config files', async () => {
     const pkg = await readJson<{ devDependencies?: Record<string, string> }>(['package.json'])
-    const qaPackage =
-      Object.keys(pkg.devDependencies ?? {}).find((name) => name.endsWith('/qa')) ?? '@merossity/qa'
+    const qaPackage = Object.keys(pkg.devDependencies ?? {}).find((name) => name.endsWith('/qa')) ?? '@merossity/qa'
     const prettier = await readText(['prettier.config.cjs'])
     const oxlint = await readText(['oxlint.json'])
     const tsconfig = await readText(['tsconfig.json'])

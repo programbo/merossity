@@ -1,6 +1,5 @@
 import os from 'node:os'
 import path from 'node:path'
-
 import type { MerossCloudCredentials, MerossCloudDevice } from './cloud'
 
 export type MerossDeviceHostMap = Record<
@@ -13,17 +12,17 @@ export type MerossDeviceHostMap = Record<
 >
 
 export type MerossConfig = {
-  cloud?: (MerossCloudCredentials & { updatedAt: string })
+  cloud?: MerossCloudCredentials & { updatedAt: string }
   devices?: { updatedAt: string; list: MerossCloudDevice[] }
   hosts?: MerossDeviceHostMap
 }
 
-export const defaultMerossConfigPath = (): string => {
+export function defaultMerossConfigPath(): string {
   const dir = path.join(os.homedir(), '.config', 'merossity')
   return path.join(dir, 'config.json')
 }
 
-export const loadMerossConfig = async (filePath = defaultMerossConfigPath()): Promise<MerossConfig> => {
+export async function loadMerossConfig(filePath: string = defaultMerossConfigPath()): Promise<MerossConfig> {
   try {
     const text = await Bun.file(filePath).text()
     const parsed = JSON.parse(text) as MerossConfig
@@ -34,7 +33,10 @@ export const loadMerossConfig = async (filePath = defaultMerossConfigPath()): Pr
   }
 }
 
-export const saveMerossConfig = async (config: MerossConfig, filePath = defaultMerossConfigPath()): Promise<void> => {
+export async function saveMerossConfig(
+  config: MerossConfig,
+  filePath: string = defaultMerossConfigPath(),
+): Promise<void> {
   const dir = path.dirname(filePath)
   // Bun.write doesn't create directories.
   const { mkdir } = await import('node:fs/promises')

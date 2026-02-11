@@ -38,4 +38,3 @@ export const loadMerossCloudDumpFile = async (path: string): Promise<MerossCloud
   const text = await Bun.file(path).text()
   return parseMerossCloudDump(text)
 }
-

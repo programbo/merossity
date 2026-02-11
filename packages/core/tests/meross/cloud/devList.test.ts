@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test'
-
 import { merossCloudListDevices } from '../../../src/meross/cloud/http'
 import type { MerossCloudCredentials } from '../../../src/meross/cloud/types'
 
@@ -11,8 +10,7 @@ const CREDS: MerossCloudCredentials = {
   userEmail: 'e@example.com',
 }
 
-const makeFetch =
-  (payload: unknown) =>
+const makeFetch = (payload: unknown) =>
   (async (_url: string, _init: RequestInit): Promise<Response> => {
     return new Response(JSON.stringify(payload), {
       status: 200,

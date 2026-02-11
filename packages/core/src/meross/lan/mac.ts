@@ -1,4 +1,4 @@
-const MAC_RE = /^([0-9a-f]{2}[:\-]){5}([0-9a-f]{2})$/i
+const MAC_RE = /^([0-9a-f]{2}[:-]){5}([0-9a-f]{2})$/i
 const HEX12_RE = /^[0-9a-f]{12}$/i
 
 export const normalizeMac = (mac: string): string => {

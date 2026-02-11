@@ -65,4 +65,3 @@ export const buildLanMessage = <Payload extends Record<string, unknown>>(
     payload: options.payload,
   }
 }
-

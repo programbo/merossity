@@ -1,6 +1,6 @@
-import path from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import {
   ensureTargetDir,
   ensureTemplates,

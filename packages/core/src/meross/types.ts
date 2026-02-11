@@ -28,4 +28,3 @@ export type MerossCloudDumpDevice = {
   // Allow extra fields from SDK dumps without losing type-safety in our code.
   [k: string]: unknown
 }
-
