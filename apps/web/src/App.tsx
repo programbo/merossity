@@ -22,6 +22,42 @@ type LanState = { host: string; channel: number; onoff: 0 | 1; channels?: LanTog
 
 type HostEntry = { host?: string; mac?: string; updatedAt?: string } | undefined
 
+function RefreshIcon(props: { className?: string }) {
+  return (
+    <svg
+      className={props.className}
+      xmlns="http://www.w3.org/2000/svg"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <polyline points="21 3 21 9 15 9" />
+    </svg>
+  )
+}
+
+const friendlyDeviceTypeFromModel = (model: string) => {
+  const m = String(model ?? '').trim().toUpperCase()
+  if (!m) return ''
+
+  if (m.startsWith('MSS')) return 'Smart Wi-Fi Plug'
+  if (m.startsWith('MSL')) return 'Smart Wi-Fi Light'
+  if (m.startsWith('MSP')) return 'Smart Power Strip'
+  if (m.startsWith('MTS')) return 'Smart Thermostat'
+  if (m.startsWith('MSH')) return 'Smart Sensor'
+  if (m.startsWith('MSG')) return 'Smart Garage Opener'
+  if (m.startsWith('MRS')) return 'Smart Roller Shutter'
+
+  return ''
+}
+
 const prefersToggleFor = (d: { deviceType?: unknown; subType?: unknown }) => {
   const typeKey = `${String(d.deviceType ?? '')} ${String(d.subType ?? '')}`.toLowerCase()
   return typeKey.includes('msl') || typeKey.includes('mss') || typeKey.includes('light') || typeKey.includes('switch')
@@ -167,14 +203,17 @@ function InventoryView() {
   const toast = useAppSelector((s) => s.context.toast)
 
   const canLan = Boolean(cloud?.key)
+  const reloadBusy = Boolean(busy.refreshDevices || busy.scanLan || busy.suggestCidr)
 
   const groups = useMemo(() => groupDevicesForControl(devices, hosts as any), [devices, hosts])
 
   const [lanState, setLanState] = useState<Record<string, LanState>>({})
   const [lanErr, setLanErr] = useState<Record<string, string>>({})
   const [toggleBusy, setToggleBusy] = useState<Record<string, boolean>>({})
+  const [refreshLanCount, setRefreshLanCount] = useState<Record<string, number>>({})
 
   const refreshLanState = async (uuid: string) => {
+    setRefreshLanCount((prev) => ({ ...prev, [uuid]: (prev[uuid] ?? 0) + 1 }))
     try {
       const res = await apiPost<{ host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[] }>(
         '/api/lan/state',
@@ -192,6 +231,16 @@ function InventoryView() {
       })
     } catch (e) {
       setLanErr((prev) => ({ ...prev, [uuid]: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setRefreshLanCount((prev) => {
+        const cur = prev[uuid] ?? 0
+        const nextCount = cur - 1
+        if (nextCount > 0) return { ...prev, [uuid]: nextCount }
+        if (!cur) return prev
+        const next = { ...prev }
+        delete next[uuid]
+        return next
+      })
     }
   }
 
@@ -297,31 +346,24 @@ function InventoryView() {
         <section className="panel">
           <header className="panel__head">
             <div>
-              <div className="panel__kicker">inventory</div>
               <h2 className="panel__title">Devices</h2>
+            </div>
+            <div className="panel__headActions">
+              <Button
+                tone="quiet"
+                className={`is-iconOnly reloadButton${reloadBusy ? ' is-busy' : ''}`}
+                aria-label="Reload devices (refresh + scan LAN)"
+                onPress={() => {
+                  app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })
+                  app.send({ type: 'DEVICES.DISCOVER_HOSTS' })
+                }}
+                isDisabled={reloadBusy}
+                icon={<RefreshIcon className={reloadBusy ? 'iconSpin' : undefined} />}
+              />
             </div>
           </header>
 
           <div className="panel__body">
-            <div className="actionRow">
-              <Button
-                tone="primary"
-                onPress={() => app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })}
-                isDisabled={busy.refreshDevices}
-                isPending={busy.refreshDevices}
-              >
-                Refresh devices
-              </Button>
-              <Button
-                tone="ghost"
-                onPress={() => app.send({ type: 'DEVICES.DISCOVER_HOSTS' })}
-                isDisabled={busy.scanLan || busy.suggestCidr}
-                isPending={busy.scanLan || busy.suggestCidr}
-              >
-                Scan LAN (find IPs)
-              </Button>
-            </div>
-
             {busy.scanLan || busy.suggestCidr ? (
               <div className="callout mt-4">
                 <div>
@@ -346,7 +388,7 @@ function InventoryView() {
             {devices.length === 0 ? (
               <div className="emptyState mt-4">
                 <div className="emptyState__title">No devices yet.</div>
-                <div className="emptyState__copy">Refresh devices to pull inventory from cloud.</div>
+                <div className="emptyState__copy">Reload to pull devices from cloud and scan your LAN for IPs.</div>
               </div>
             ) : (
               <div className="deviceGroups mt-5">
@@ -359,6 +401,7 @@ function InventoryView() {
                   lanState={lanState}
                   lanErr={lanErr}
                   toggleBusy={toggleBusy}
+                  refreshLanCount={refreshLanCount}
                   onRefreshLanState={refreshLanState}
                   onToggleLan={toggleLan}
                 />
@@ -371,6 +414,7 @@ function InventoryView() {
                   lanState={lanState}
                   lanErr={lanErr}
                   toggleBusy={toggleBusy}
+                  refreshLanCount={refreshLanCount}
                   onRefreshLanState={refreshLanState}
                   onToggleLan={toggleLan}
                 />
@@ -420,10 +464,12 @@ function DeviceGroup(props: {
   lanState: Record<string, LanState>
   lanErr: Record<string, string>
   toggleBusy: Record<string, boolean>
+  refreshLanCount: Record<string, number>
   onRefreshLanState: (uuid: string) => Promise<void>
   onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
 }) {
-  const { title, count, devices, hosts, uuids, lanState, lanErr, toggleBusy, onRefreshLanState, onToggleLan } = props
+  const { title, count, devices, hosts, uuids, lanState, lanErr, toggleBusy, refreshLanCount, onRefreshLanState, onToggleLan } =
+    props
   const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
 
   return (
@@ -442,6 +488,7 @@ function DeviceGroup(props: {
               hostEntry={hosts[uuid] as HostEntry}
               lan={lanState[uuid]}
               lanError={lanErr[uuid]}
+              isRefreshingLanState={Boolean(refreshLanCount[uuid])}
               isToggling={Boolean(toggleBusy[uuid])}
               onRefreshLanState={onRefreshLanState}
               onToggleLan={onToggleLan}
@@ -458,6 +505,7 @@ function DeviceRow(props: {
   hostEntry: HostEntry
   lan: LanState | undefined
   lanError: string | undefined
+  isRefreshingLanState: boolean
   isToggling: boolean
   onRefreshLanState: (uuid: string) => Promise<void>
   onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
@@ -480,7 +528,9 @@ function DeviceRow(props: {
         : 'muted'
 
   const title = String(d.devName ?? '') || uuid
-  const subtitle = [d.deviceType, d.subType].filter(Boolean).join(' / ')
+  const model = String(d.deviceType ?? '').trim()
+  const typeLabel = friendlyDeviceTypeFromModel(model)
+  const subtitle = [typeLabel, model].filter(Boolean).join(' / ')
 
   const macCloud = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
   const macLan = props.hostEntry?.mac ? String(props.hostEntry.mac) : ''
@@ -552,9 +602,14 @@ function DeviceRow(props: {
                 label="Power"
                 description={undefined}
               />
-              <Button tone="quiet" onPress={() => void props.onRefreshLanState(uuid)} isDisabled={toggleDisabled}>
-                Refresh
-              </Button>
+              <Button
+                tone="quiet"
+                className="is-iconOnly"
+                aria-label="Refresh device state"
+                onPress={() => void props.onRefreshLanState(uuid)}
+                isDisabled={toggleDisabled}
+                icon={<RefreshIcon className={props.isRefreshingLanState ? 'iconSpin' : undefined} />}
+              />
             </>
           ) : (
             <>

@@ -642,6 +642,69 @@
     user-select: none;
   }
 
+  .rac-button.is-iconOnly {
+    width: 44px;
+    padding: 0;
+    gap: 0;
+  }
+
+  .rac-button.is-iconOnly .rac-button__label {
+    display: none;
+  }
+
+  .reloadButton {
+    position: relative;
+    overflow: visible;
+    z-index: 0;
+  }
+
+  .reloadButton::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 999px;
+    background:
+      radial-gradient(closest-side, rgba(242, 246, 255, 0.22), transparent 60%),
+      repeating-conic-gradient(
+        from 0deg,
+        rgba(45, 212, 191, 0.7) 0 14deg,
+        rgba(255, 106, 0, 0.7) 14deg 28deg,
+        rgba(255, 59, 59, 0.65) 28deg 42deg,
+        rgba(180, 107, 255, 0.55) 42deg 56deg
+      );
+    filter: blur(10px) saturate(140%);
+    opacity: 0;
+    transform: rotate(0deg);
+    transition: opacity 180ms ease;
+    pointer-events: none;
+  }
+
+  .reloadButton.is-busy::before {
+    opacity: 0.9;
+    animation: merossity-reloadGlowSpin 1.15s linear infinite;
+  }
+
+  .rac-button.reloadButton.is-busy[data-disabled] {
+    opacity: 1;
+  }
+
+  .iconSpin {
+    animation: merossity-iconSpin 0.95s linear infinite;
+    transform-origin: 50% 50%;
+  }
+
+  @keyframes merossity-reloadGlowSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes merossity-iconSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .rac-button__label {
     translate: 0 0;
   }

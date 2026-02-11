@@ -24,8 +24,8 @@
   },
   "devDependencies": {
     "@merossity/qa": "workspace:*",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "@types/bun": "latest"
   }
 }
