@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Heading } from 'react-aria-components'
 import './index.css'
+import { apiPost } from './lib/api'
 import type { Tab as AppTab } from './lib/nav'
 import { getHashTab } from './lib/nav'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
@@ -15,6 +16,9 @@ const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n
 const INPUT_COMMON = { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const
 const INPUT_PASSWORD = { ...INPUT_COMMON, type: 'password' as const } as const
 const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as const
+
+type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
+type LanState = { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[]; updatedAt: number }
 
 export function App() {
   return (
@@ -225,6 +229,10 @@ const DevicesCard = () => {
   const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : 'Not linked'
   const canLan = Boolean(cloud || status?.env.hasKey)
 
+  const [lanState, setLanState] = useState<Record<string, LanState>>({})
+  const [lanErr, setLanErr] = useState<Record<string, string>>({})
+  const [toggleBusy, setToggleBusy] = useState<Record<string, boolean>>({})
+
   const deriveMacFromUuid = (uuid: string): string => {
     const u = String(uuid || '').trim()
     if (!/^[0-9a-f]{32}$/i.test(u)) return ''
@@ -232,6 +240,103 @@ const DevicesCard = () => {
     if (!/^[0-9a-f]{12}$/.test(suffix)) return ''
     return suffix.match(/.{2}/g)!.join(':')
   }
+
+  const prefersToggleFor = (d: { deviceType?: unknown; subType?: unknown }) => {
+    const typeKey = `${String(d.deviceType ?? '')} ${String(d.subType ?? '')}`.toLowerCase()
+    return typeKey.includes('msl') || typeKey.includes('mss') || typeKey.includes('light') || typeKey.includes('switch')
+  }
+
+  const refreshLanState = async (uuid: string) => {
+    try {
+      const res = await apiPost<{ host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[] }>(
+        '/api/lan/state',
+        { uuid, channel: 0 },
+      )
+      setLanState((prev) => ({
+        ...prev,
+        [uuid]: { host: res.host, channel: res.channel, onoff: res.onoff, channels: res.channels, updatedAt: Date.now() },
+      }))
+      setLanErr((prev) => {
+        if (!prev[uuid]) return prev
+        const next = { ...prev }
+        delete next[uuid]
+        return next
+      })
+    } catch (e) {
+      setLanErr((prev) => ({ ...prev, [uuid]: e instanceof Error ? e.message : String(e) }))
+    }
+  }
+
+  const toggleLan = async (uuid: string, onoff: 0 | 1) => {
+    // Per-device busy flag so other devices stay interactive.
+    setToggleBusy((prev) => ({ ...prev, [uuid]: true }))
+    try {
+      await apiPost('/api/lan/toggle', { uuid, channel: 0, onoff })
+      app.send({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: onoff ? 'Switched on' : 'Switched off', detail: clampText(uuid, 12) } })
+    } catch (e) {
+      app.send({
+        type: 'TOAST.SHOW',
+        toast: { kind: 'err', title: 'Toggle failed', detail: e instanceof Error ? e.message : String(e) },
+      })
+    } finally {
+      setToggleBusy((prev) => ({ ...prev, [uuid]: false }))
+    }
+  }
+
+  // Opportunistic: once we have a host (IP) for a light/switch, fetch its state at least once so the card can reflect it.
+  useEffect(() => {
+    if (!canLan) return
+
+    let alive = true
+    const run = async () => {
+      // Keep this conservative to avoid hammering the LAN on big inventories.
+      const uuids: string[] = []
+      for (const d of devices) {
+        if (!alive) return
+        if (!prefersToggleFor(d)) continue
+        const host = hosts[d.uuid]?.host
+        if (!host) continue
+        if (lanState[d.uuid]) continue
+        if (lanErr[d.uuid]) continue
+        uuids.push(d.uuid)
+        if (uuids.length >= 6) break
+      }
+
+      for (const uuid of uuids) {
+        if (!alive) return
+        await refreshLanState(uuid)
+        await new Promise((r) => setTimeout(r, 120))
+      }
+    }
+
+    void run()
+    return () => {
+      alive = false
+    }
+  }, [devices, hosts, canLan, lanState, lanErr])
+
+  // When a device is open and has a resolved host, fetch its LAN power state and keep it fresh.
+  const expandedUuid = devicesUi.expandedUuid
+  const expandedHost = expandedUuid ? hosts[expandedUuid]?.host : null
+  useEffect(() => {
+    const uuid = expandedUuid
+    if (!uuid) return
+    if (!expandedHost) return
+    if (!canLan) return
+
+    let alive = true
+    const tick = async () => {
+      if (!alive) return
+      await refreshLanState(uuid)
+    }
+
+    void tick()
+    const id = setInterval(() => void tick(), 10_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [expandedUuid, expandedHost, canLan])
 
   return (
     <section className="panel">
@@ -311,13 +416,25 @@ const DevicesCard = () => {
               const macForResolve = macCloud || macLan || ''
               const expanded = devicesUi.expandedUuid === d.uuid
 
+              const l = lanState[d.uuid]
+              const ch0 = l?.channels?.find((c) => c.channel === 0) ?? (l ? { channel: 0, onoff: l.onoff } : null)
+              const lanOn = ch0 ? ch0.onoff === 1 : null
+              const powerClass = lanOn === null ? '' : lanOn ? 'device--power-on' : 'device--power-off'
+              const lanChipTone = lanOn === null ? 'muted' : lanOn ? 'ok' : 'muted'
+
+              const prefersToggle = prefersToggleFor(d)
+              const isToggling = Boolean(toggleBusy[d.uuid])
+
               return (
-                <article key={d.uuid} className={expanded ? 'device device--open' : 'device'}>
+                <article key={d.uuid} className={expanded ? `device device--open ${powerClass}` : `device ${powerClass}`}>
                   <header className="device__head">
                     <div className="device__id">
                       <div className="device__titleRow">
                         <div className="device__title">{title}</div>
                         <div className={`chip chip--${onlineTone}`}>{online || 'unknown'}</div>
+                        <div className={`chip chip--${lanChipTone}`}>
+                          lan: {lanOn === null ? 'unknown' : lanOn ? 'on' : 'off'}
+                        </div>
                       </div>
                       <div className="device__subtitle">{subtitle || 'device'}</div>
                       <div className="device__facts">
@@ -370,12 +487,70 @@ const DevicesCard = () => {
                       >
                         System snapshot
                       </Button>
-                      <Button tone="ghost" onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 1 })} isDisabled={busy !== null || !host}>
-                        Toggle ON
-                      </Button>
-                      <Button tone="danger" onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 0 })} isDisabled={busy !== null || !host}>
-                        Toggle OFF
-                      </Button>
+
+                      {prefersToggle ? (
+                        <div className="device__power">
+                          <Switch
+                            isSelected={lanOn === null ? false : lanOn}
+                            onChange={(next) => {
+                              // Optimistic UI: update immediately, then confirm via a state refresh.
+                              setLanState((prev) => ({
+                                ...prev,
+                                [d.uuid]: {
+                                  host: host ?? prev[d.uuid]?.host ?? '',
+                                  channel: 0,
+                                  onoff: next ? 1 : 0,
+                                  channels: prev[d.uuid]?.channels,
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                              void toggleLan(d.uuid, next ? 1 : 0)
+                              setTimeout(() => void refreshLanState(d.uuid), 700)
+                            }}
+                            isDisabled={!host || isToggling}
+                            label="Power"
+                            description={
+                              !host
+                                ? 'Resolve host to control'
+                                : lanErr[d.uuid]
+                                  ? `state error: ${lanErr[d.uuid]}`
+                                  : l
+                                    ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
+                                    : 'state unknown (open card to fetch)'
+                            }
+                          />
+                          <Button
+                            tone="quiet"
+                            onPress={() => void refreshLanState(d.uuid)}
+                            isDisabled={!host || isToggling}
+                          >
+                            Refresh state
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <Button
+                            tone="ghost"
+                            onPress={() => {
+                              void toggleLan(d.uuid, 1)
+                              setTimeout(() => void refreshLanState(d.uuid), 700)
+                            }}
+                            isDisabled={!host || isToggling}
+                          >
+                            Toggle ON
+                          </Button>
+                          <Button
+                            tone="danger"
+                            onPress={() => {
+                              void toggleLan(d.uuid, 0)
+                              setTimeout(() => void refreshLanState(d.uuid), 700)
+                            }}
+                            isDisabled={!host || isToggling}
+                          >
+                            Toggle OFF
+                          </Button>
+                        </>
+                      )}
                     </div>
                   ) : null}
                 </article>

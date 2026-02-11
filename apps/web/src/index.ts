@@ -369,6 +369,36 @@ const extractLanMac = (resp: any): string | null => {
   }
 }
 
+type LanToggleXState = { channel: number; onoff: 0 | 1 }
+
+const extractLanToggleX = (resp: any): LanToggleXState[] | null => {
+  const candidates = [
+    resp?.payload?.all?.digest?.togglex,
+    resp?.payload?.all?.digest?.toggleX,
+    resp?.payload?.all?.digest?.toggle,
+    resp?.payload?.all?.digest?.togglex?.togglex,
+  ]
+
+  for (const c of candidates) {
+    if (!c) continue
+
+    const arr: any[] = Array.isArray(c) ? c : [c]
+    const out: LanToggleXState[] = []
+
+    for (const item of arr) {
+      const channel = Number(item?.channel)
+      const onoffNum = Number(item?.onoff)
+      if (!Number.isInteger(channel) || channel < 0) continue
+      const onoff: 0 | 1 = onoffNum === 1 ? 1 : 0
+      out.push({ channel, onoff })
+    }
+
+    if (out.length) return out.sort((a, b) => a.channel - b.channel)
+  }
+
+  return null
+}
+
 const resolveHostByUuidScan = async (
   uuid: string,
   cidr: string,
@@ -727,6 +757,32 @@ const _server = await serveWithControl({
           const key = await requireLanKey()
           const data = await getSystemAll<any>({ host, key })
           return json(apiOk({ host, data }))
+        } catch (e) {
+          return json(apiErr(e instanceof Error ? e.message : String(e), 'lan_error'))
+        }
+      },
+    },
+
+    '/api/lan/state': {
+      async POST(req) {
+        const body = (await parseJsonBody(req)) ?? {}
+        const uuid = String(body.uuid ?? '')
+        const channel = body.channel === undefined ? 0 : Number(body.channel)
+        if (!uuid) return json(apiErr('Missing uuid', 'missing_uuid'))
+        if (!Number.isInteger(channel) || channel < 0)
+          return json(apiErr('Invalid channel', 'invalid_channel'))
+
+        try {
+          const host = await requireLanHost(uuid)
+          const key = await requireLanKey()
+          // Keep this a bit snappier than a full system dump fetch.
+          const data = await getSystemAll<any>({ host, key, timeoutMs: 3000 })
+          const togglex = extractLanToggleX(data)
+          const match = togglex?.find((t) => t.channel === channel) ?? null
+          if (!match) {
+            return json(apiErr('ToggleX state not found in Appliance.System.All digest', 'state_unavailable'))
+          }
+          return json(apiOk({ host, channel: match.channel, onoff: match.onoff, channels: togglex }))
         } catch (e) {
           return json(apiErr(e instanceof Error ? e.message : String(e), 'lan_error'))
         }
