@@ -1,5 +1,6 @@
 export * from './cloud'
 export * from './config'
 export * from './dump'
+export * from './inventory'
 export * from './lan'
 export * from './types'

@@ -1,20 +1,20 @@
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import { Heading } from 'react-aria-components'
+import { groupDevicesForControl } from '@merossity/core/meross/inventory'
 import './index.css'
-import type { Tab as AppTab } from './lib/nav'
-import { getHashTab } from './lib/nav'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
 import { Button } from './ui/rac/Button'
 import { Modal } from './ui/rac/Modal'
 import { Switch } from './ui/rac/Switch'
 import { TextField } from './ui/rac/TextField'
-import { Tab, TabList, TabPanel, TabPanels, Tabs } from './ui/rac/Tabs'
 
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
 
 const INPUT_COMMON = { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const
 const INPUT_PASSWORD = { ...INPUT_COMMON, type: 'password' as const } as const
 const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as const
+
+const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
 
 export function App() {
   return (
@@ -25,404 +25,144 @@ export function App() {
 }
 
 function AppView() {
-  const app = useAppActorRef()
-  const tab = useAppSelector((s) => s.context.tab)
-  const status = useAppSelector((s) => s.context.status)
-  const cloud = useAppSelector((s) => s.context.cloud)
   const busy = useAppSelector((s) => s.context.busy)
-  const toast = useAppSelector((s) => s.context.toast)
+  const linked = useAppSelector((s) => Boolean(s.context.cloud?.key))
+  if (busy.bootstrap) return <BootView />
+  return <div className="lab-bg min-h-screen">{linked ? <InventoryView /> : <KeyGateView />}</div>
+}
 
-  useEffect(() => {
-    const onHash = () => app.send({ type: 'HASH_CHANGED', tab: getHashTab() })
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [app])
-
-  const appTitle = useMemo(() => {
-    const c = cloud?.userEmail ? cloud.userEmail : 'local control'
-    return `Merossity · ${c}`
-  }, [cloud?.userEmail])
-
-  useEffect(() => {
-    document.title = appTitle
-  }, [appTitle])
-
-  const envLabel = status ? (status.env.hasEmail && status.env.hasPassword ? 'ready' : 'partial') : '…'
-  const envTone = status ? (status.env.hasEmail && status.env.hasPassword ? 'ok' : 'warn') : 'muted'
-
-  const cloudLabel = cloud ? 'linked' : 'offline'
-  const cloudTone = cloud ? 'ok' : 'muted'
-
+function BootView() {
   return (
-    <div className="lab-bg min-h-screen">
-      <div className="app-shell">
-        <header className="app-header">
-          <div className="brand">
-            <div className="brand__kicker">switchboard</div>
-            <div className="brand__title">Merossity</div>
-            <div className="brand__tag">Cloud key, device inventory, LAN toggles. No dashboards. Just switches.</div>
-          </div>
-
-          <div className="status-strip" aria-label="Status">
-            <div className={`chip chip--${envTone}`}>env: {envLabel}</div>
-            <div className={`chip chip--${cloudTone}`}>cloud: {cloudLabel}</div>
-          </div>
-
-          <div className="app-actions">
-            <Button tone="quiet" onPress={() => app.send({ type: 'REFRESH_ALL' })} isDisabled={busy !== null}>
-              Sync
-            </Button>
-            <Button
-              tone="primary"
-              onPress={() => app.send({ type: 'NAVIGATE', tab: cloud ? 'devices' : 'connect' })}
-              isDisabled={busy !== null}
-            >
-              {cloud ? 'Devices' : 'Link Cloud'}
-            </Button>
-            <Button tone="ghost" onPress={() => app.send({ type: 'NAVIGATE', tab: 'settings' })} isDisabled={busy !== null}>
-              Config
-            </Button>
-          </div>
-        </header>
-
-        <main className="app-main">
-          <Tabs
-            selectedKey={tab}
-            onSelectionChange={(key) => app.send({ type: 'NAVIGATE', tab: key as AppTab })}
-          >
-            <TabPanels>
-              <TabPanel id="connect">
-                <ConnectCard />
-              </TabPanel>
-              <TabPanel id="devices">
-                <DevicesCard />
-              </TabPanel>
-              <TabPanel id="settings">
-                <SettingsCard />
-              </TabPanel>
-            </TabPanels>
-
-            <div className="dock">
-              <TabList aria-label="Panels">
-                <Tab id="connect">Connect</Tab>
-                <Tab id="devices">Devices</Tab>
-                <Tab id="settings">Settings</Tab>
-              </TabList>
-            </div>
-          </Tabs>
-        </main>
-      </div>
-
-      {toast ? (
-        <div className="toastRegion" role="status" aria-live="polite">
-          <div className={`toast toast--${toast.kind}`}>
-            <div className="toast__row">
-              <div className="toast__badge">{toast.kind === 'ok' ? 'OK' : 'ERROR'}</div>
-              <div className="toast__brand">merossity</div>
-            </div>
-            <div className="toast__title">{toast.title}</div>
-            {toast.detail ? <div className="toast__detail">{toast.detail}</div> : null}
-          </div>
+    <div className="app-shell">
+      <header className="app-header app-header--simple">
+        <div className="brand">
+          <div className="brand__title">Merossity</div>
+          <div className="brand__sub">Loading…</div>
         </div>
-      ) : null}
+      </header>
     </div>
   )
 }
 
-const ConnectCard = () => {
+function KeyGateView() {
   const app = useAppActorRef()
   const status = useAppSelector((s) => s.context.status)
-  const busy = useAppSelector((s) => s.context.busy)
   const connect = useAppSelector((s) => s.context.connect)
+  const busy = useAppSelector((s) => s.context.busy)
+  const toast = useAppSelector((s) => s.context.toast)
 
   const envReady = Boolean(status?.env.hasEmail && status?.env.hasPassword)
+  const canSubmit = useMemo(() => {
+    if (!isTotpValid(connect.totp)) return false
+    if (connect.useEnv) return envReady
+    return Boolean(connect.email.trim() && connect.password)
+  }, [connect.email, connect.password, connect.totp, connect.useEnv, envReady])
 
   return (
-    <section className="panel">
-      <header className="panel__head">
-        <div>
-          <div className="panel__kicker">step 1</div>
-          <h2 className="panel__title">Connect Cloud</h2>
+    <div className="app-shell">
+      <header className="app-header app-header--simple">
+        <div className="brand">
+          <div className="brand__title">Meross Cloud Key</div>
         </div>
-        <div className={`chip chip--${envReady ? 'ok' : 'warn'}`}>{envReady ? 'env ready' : 'env missing'}</div>
       </header>
 
-      <div className="panel__body">
-        <div className="callout">
-          <div className="callout__title">Credential source</div>
-          <div className="callout__copy">
-            Default is server-side `.env` (repo root). Override here if you want, or flip to manual entry.
+      <main className="app-main">
+        <section className="panel">
+          <header className="panel__head">
+            <div>
+              <div className="panel__kicker">required</div>
+              <h2 className="panel__title">Link your account</h2>
+            </div>
+          </header>
+
+          <div className="panel__body">
+            <div className="grid gap-4">
+              <TextField
+                label={connect.useEnv ? 'Email (disabled: using server env)' : 'Email'}
+                value={connect.email}
+                onChange={(email) => app.send({ type: 'CONNECT.SET_EMAIL', email })}
+                placeholder="name@example.com"
+                isDisabled={busy.login || busy.bootstrap || connect.useEnv}
+                inputProps={INPUT_COMMON}
+              />
+
+              <TextField
+                label={connect.useEnv ? 'Password (disabled: using server env)' : 'Password'}
+                value={connect.password}
+                onChange={(password) => app.send({ type: 'CONNECT.SET_PASSWORD', password })}
+                placeholder="••••••••"
+                isDisabled={busy.login || busy.bootstrap || connect.useEnv}
+                inputProps={INPUT_PASSWORD}
+              />
+
+              <TextField
+                label="TOTP (6 digits)"
+                value={connect.totp}
+                onChange={(totp) => app.send({ type: 'CONNECT.SET_TOTP', totp })}
+                placeholder="123456"
+                hint="Required."
+                isDisabled={busy.login || busy.bootstrap}
+                inputProps={INPUT_NUMERIC}
+              />
+            </div>
+
+            <details className="details mt-4">
+              <summary className="details__summary">Advanced</summary>
+              <div className="details__body">
+                <div className="callout">
+                  <div>
+                    <div className="callout__title">Server env credentials</div>
+                    <div className="callout__copy">
+                      Email/password: {envReady ? 'present' : 'missing'}.
+                    </div>
+                  </div>
+                  <div className="callout__right">
+                    <Switch
+                      isSelected={connect.useEnv}
+                      onChange={(useEnv) => app.send({ type: 'CONNECT.SET_USE_ENV', useEnv })}
+                      isDisabled={busy.login || busy.bootstrap}
+                      label="Use server env"
+                      description={connect.useEnv ? 'Email/password disabled' : 'Manual entry'}
+                    />
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <div className="actionRow mt-5">
+              <Button
+                tone="primary"
+                onPress={() => app.send({ type: 'CONNECT.SUBMIT' })}
+                isDisabled={busy.login || busy.bootstrap || !canSubmit}
+                isPending={busy.login}
+              >
+                Fetch key
+              </Button>
+            </div>
           </div>
-          <div className="callout__right">
-            <Switch
-              isSelected={connect.useEnv}
-              onChange={(useEnv) => app.send({ type: 'CONNECT.SET_USE_ENV', useEnv })}
-              isDisabled={busy !== null}
-              label="Use env defaults"
-              description={connect.useEnv ? 'Override allowed' : 'Manual mode'}
-            />
-          </div>
-        </div>
+        </section>
+      </main>
 
-        <div className="grid gap-4">
-          <TextField
-            label={connect.useEnv ? 'Email (optional override)' : 'Email'}
-            value={connect.email}
-            onChange={(email) => app.send({ type: 'CONNECT.SET_EMAIL', email })}
-            placeholder={connect.useEnv ? 'leave blank to use .env' : 'name@example.com'}
-            isDisabled={busy !== null}
-            inputProps={INPUT_COMMON}
-          />
-
-          <TextField
-            label={connect.useEnv ? 'Password (optional override)' : 'Password'}
-            value={connect.password}
-            onChange={(password) => app.send({ type: 'CONNECT.SET_PASSWORD', password })}
-            placeholder={connect.useEnv ? 'leave blank to use .env' : '••••••••'}
-            isDisabled={busy !== null}
-            inputProps={INPUT_PASSWORD}
-          />
-
-          {connect.mfaRequired ? (
-            <TextField
-              label="Verification code (TOTP)"
-              value={connect.mfaCode}
-              onChange={(mfaCode) => app.send({ type: 'CONNECT.SET_MFA_CODE', mfaCode })}
-              placeholder="123456"
-              hint="Meross cloud sometimes requires an app-based verification code."
-              isDisabled={busy !== null}
-              inputProps={INPUT_NUMERIC}
-            />
-          ) : null}
-        </div>
-
-        <div className="actionRow">
-          <Button tone="primary" onPress={() => app.send({ type: 'CONNECT.SUBMIT' })} isDisabled={busy !== null} isPending={busy === 'login'}>
-            Link cloud
-          </Button>
-          <Button tone="ghost" onPress={() => app.send({ type: 'CONNECT.RESET_MFA' })} isDisabled={busy !== null}>
-            Reset prompt
-          </Button>
-        </div>
-
-        <div className="panel__note">
-          Pro tip: set `MEROSS_EMAIL` and `MEROSS_PASSWORD` in the repo root `.env` to keep browser fields blank.
-        </div>
-      </div>
-    </section>
+      {toast ? <Toast /> : null}
+    </div>
   )
 }
 
-const DevicesCard = () => {
+function InventoryView() {
   const app = useAppActorRef()
-  const status = useAppSelector((s) => s.context.status)
   const cloud = useAppSelector((s) => s.context.cloud)
   const devices = useAppSelector((s) => s.context.devices)
   const hosts = useAppSelector((s) => s.context.hosts)
   const busy = useAppSelector((s) => s.context.busy)
   const devicesUi = useAppSelector((s) => s.context.devicesUi)
+  const toast = useAppSelector((s) => s.context.toast)
 
-  const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : 'Not linked'
-  const canLan = Boolean(cloud || status?.env.hasKey)
-
-  const deriveMacFromUuid = (uuid: string): string => {
-    const u = String(uuid || '').trim()
-    if (!/^[0-9a-f]{32}$/i.test(u)) return ''
-    const suffix = u.slice(-12).toLowerCase()
-    if (!/^[0-9a-f]{12}$/.test(suffix)) return ''
-    return suffix.match(/.{2}/g)!.join(':')
-  }
-
-  return (
-    <section className="panel">
-      <header className="panel__head">
-        <div>
-          <div className="panel__kicker">step 2</div>
-          <h2 className="panel__title">Devices</h2>
-        </div>
-        <div className="panel__meta">{cloudHint}</div>
-      </header>
-
-      <div className="panel__body">
-        <div className="actionRow">
-          <Button
-            tone="primary"
-            onPress={() => app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })}
-            isDisabled={busy !== null || !cloud}
-            isPending={busy === 'refresh_devices'}
-          >
-            Refresh list
-          </Button>
-          <Button tone="ghost" onPress={() => app.send({ type: 'REFRESH_ALL' })} isDisabled={busy !== null}>
-            Sync local
-          </Button>
-        </div>
-
-        <div className="subpanel">
-          <TextField
-            label="LAN scan CIDR (optional)"
-            value={devicesUi.cidr}
-            onChange={(cidr) => app.send({ type: 'DEVICES.SET_CIDR', cidr })}
-            placeholder="auto (e.g. 192.168.68.0/22)"
-            hint="Optional. Leave blank to use the server's auto-detected LAN range, or enter your CIDR (e.g. 192.168.68.0/22) to speed up host discovery."
-            isDisabled={busy !== null}
-            inputProps={INPUT_COMMON}
-          />
-          <div className="actionRow mt-3">
-            <Button
-              tone="quiet"
-              onPress={() => app.send({ type: 'DEVICES.DISCOVER_HOSTS' })}
-              isDisabled={busy !== null || !canLan}
-              isPending={busy === 'discover_hosts'}
-            >
-              Discover LAN
-            </Button>
-          </div>
-        </div>
-
-        {devices.length === 0 ? (
-          <div className="emptyState">
-            <div className="emptyState__title">No devices yet.</div>
-            <div className="emptyState__copy">Link cloud, then refresh the list to populate inventory.</div>
-            <div className="emptyState__actions">
-              <Button tone="primary" onPress={() => app.send({ type: 'NAVIGATE', tab: 'connect' })} isDisabled={busy !== null}>
-                Go to Connect
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="deviceList">
-            {devices.map((d) => {
-              const host = hosts[d.uuid]?.host
-              const online = String(d.onlineStatus ?? '').toLowerCase()
-              const onlineTone =
-                online.includes('online') || online === '1'
-                  ? 'ok'
-                  : online.includes('offline') || online === '0'
-                    ? 'err'
-                    : 'muted'
-
-              const title = d.devName || d.uuid
-              const subtitle = [d.deviceType, d.subType].filter(Boolean).join(' / ')
-              const macCloud = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
-              const macLan = hosts[d.uuid]?.mac ?? ''
-              const macDerived = !macCloud && !macLan ? deriveMacFromUuid(d.uuid) : ''
-              const mac = macCloud || macLan || macDerived
-              const macForResolve = macCloud || macLan || ''
-              const expanded = devicesUi.expandedUuid === d.uuid
-
-              return (
-                <article key={d.uuid} className={expanded ? 'device device--open' : 'device'}>
-                  <header className="device__head">
-                    <div className="device__id">
-                      <div className="device__titleRow">
-                        <div className="device__title">{title}</div>
-                        <div className={`chip chip--${onlineTone}`}>{online || 'unknown'}</div>
-                      </div>
-                      <div className="device__subtitle">{subtitle || 'device'}</div>
-                      <div className="device__facts">
-                        <div>
-                          <span className="device__factKey">uuid</span> <span className="device__factVal">{d.uuid}</span>
-                        </div>
-                        {mac ? (
-                          <div>
-                            <span className="device__factKey">
-                              {macCloud ? 'mac (cloud)' : macLan ? 'mac (lan)' : 'mac (guess)'}
-                            </span>{' '}
-                            <span className="device__factVal">{mac}</span>
-                          </div>
-                        ) : null}
-                        <div>
-                          <span className="device__factKey">host</span>{' '}
-                          <span className="device__factVal">{host ? host : '(not resolved)'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="device__cta">
-                      <Button tone="quiet" onPress={() => app.send({ type: 'DEVICES.TOGGLE_EXPANDED', uuid: d.uuid })} isDisabled={busy !== null}>
-                        {expanded ? 'Collapse' : 'Open'}
-                      </Button>
-                    </div>
-                  </header>
-
-                  {expanded ? (
-                    <div className="device__actions">
-                      <Button
-                        tone="primary"
-                        onPress={() =>
-                          app.send({
-                            type: 'DEVICES.RESOLVE_HOST',
-                            uuid: d.uuid,
-                            // Never send derived MAC guesses to the server.
-                            mac: macForResolve,
-                            title: d.devName ?? d.uuid,
-                          })
-                        }
-                        isDisabled={busy !== null}
-                      >
-                        Resolve host
-                      </Button>
-                      <Button
-                        tone="ghost"
-                        onPress={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid: d.uuid })}
-                        isDisabled={busy !== null || !host}
-                      >
-                        System snapshot
-                      </Button>
-                      <Button tone="ghost" onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 1 })} isDisabled={busy !== null || !host}>
-                        Toggle ON
-                      </Button>
-                      <Button tone="danger" onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid: d.uuid, onoff: 0 })} isDisabled={busy !== null || !host}>
-                        Toggle OFF
-                      </Button>
-                    </div>
-                  ) : null}
-                </article>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      <Modal
-        isDismissable
-        isOpen={Boolean(devicesUi.systemDump)}
-        onOpenChange={(open) => {
-          if (!open) app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })
-        }}
-      >
-        {devicesUi.systemDump ? (
-          <div className="dump">
-            <Heading slot="title" className="dump__title">
-              Appliance.System.All
-            </Heading>
-            <div className="dump__meta">
-              <div className="dump__uuid">{clampText(devicesUi.systemDump.uuid, 22)}</div>
-              <div className="dump__host">{devicesUi.systemDump.host}</div>
-            </div>
-            <pre className="dump__pre">{JSON.stringify(devicesUi.systemDump.data, null, 2)}</pre>
-            <div className="dump__actions">
-              <Button tone="ghost" slot="close" onPress={() => app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })}>
-                Close
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-    </section>
-  )
-}
-
-const SettingsCard = () => {
-  const app = useAppActorRef()
-  const status = useAppSelector((s) => s.context.status)
-  const cloud = useAppSelector((s) => s.context.cloud)
+  const groups = useMemo(() => groupDevicesForControl(devices, hosts as any), [devices, hosts])
 
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      app.send({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Copied to clipboard' } })
+      app.send({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Copied' } })
     } catch (e) {
       app.send({
         type: 'TOAST.SHOW',
@@ -431,68 +171,298 @@ const SettingsCard = () => {
     }
   }
 
-  const cfg = status?.config
+  const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : ''
 
   return (
-    <section className="panel">
-      <header className="panel__head">
-        <div>
-          <div className="panel__kicker">notes</div>
-          <h2 className="panel__title">Settings</h2>
+    <div className="app-shell">
+      <header className="app-header app-header--inventory">
+        <div className="brand">
+          <div className="brand__title">Merossity</div>
+          <div className="brand__sub">{cloudHint}</div>
         </div>
-        <div className="panel__meta">paths + keys</div>
+
+        {cloud ? (
+          <div className="app-actions">
+            <Button tone="primary" onPress={() => void copy(cloud.key)}>
+              Copy key
+            </Button>
+          </div>
+        ) : null}
       </header>
 
-      <div className="panel__body">
-        <div className="subpanel">
-          <div className="subpanel__title">Config</div>
-          <div className="kv">
-            <div className="kv__row">
-              <div className="kv__k">path</div>
-              <div className="kv__v">{cfg?.path ?? '…'}</div>
+      <main className="app-main">
+        <section className="panel">
+          <header className="panel__head">
+            <div>
+              <div className="panel__kicker">inventory</div>
+              <h2 className="panel__title">Devices</h2>
             </div>
-            <div className="kv__row">
-              <div className="kv__k">cloud creds</div>
-              <div className="kv__v">{cfg?.hasCloudCreds ? 'yes' : 'no'}</div>
+          </header>
+
+          <div className="panel__body">
+            <div className="actionRow">
+              <Button
+                tone="primary"
+                onPress={() => app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })}
+                isDisabled={busy.refreshDevices}
+                isPending={busy.refreshDevices}
+              >
+                Refresh devices
+              </Button>
+              <Button
+                tone="ghost"
+                onPress={() => app.send({ type: 'DEVICES.DISCOVER_HOSTS' })}
+                isDisabled={busy.scanLan || busy.suggestCidr}
+                isPending={busy.scanLan || busy.suggestCidr}
+              >
+                Scan LAN (find IPs)
+              </Button>
             </div>
-            <div className="kv__row">
-              <div className="kv__k">device list</div>
-              <div className="kv__v">{cfg?.hasDevices ? 'yes' : 'no'}</div>
+
+            {busy.scanLan || busy.suggestCidr ? (
+              <div className="callout mt-4">
+                <div>
+                  <div className="callout__title">Scanning LAN</div>
+                  <div className="callout__copy">
+                    Looking up IPs. Devices with a known IP remain controllable while the scan runs.
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="subpanel mt-4">
+              <TextField
+                label="CIDR (optional)"
+                value={devicesUi.cidr}
+                onChange={(cidr) => app.send({ type: 'DEVICES.SET_CIDR', cidr })}
+                placeholder="auto (recommended)"
+                hint="Leave blank to auto-suggest; set a CIDR to speed up scanning."
+                isDisabled={busy.scanLan || busy.suggestCidr}
+                inputProps={INPUT_COMMON}
+              />
             </div>
-            <div className="kv__row">
-              <div className="kv__k">hosts</div>
-              <div className="kv__v">{cfg?.hasHosts ? 'yes' : 'no'}</div>
+
+            {devices.length === 0 ? (
+              <div className="emptyState mt-4">
+                <div className="emptyState__title">No devices yet.</div>
+                <div className="emptyState__copy">Refresh devices to pull inventory from cloud.</div>
+              </div>
+            ) : (
+              <div className="deviceGroups mt-5">
+                <DeviceGroup
+                  title="Ready to control"
+                  count={groups.ready.length}
+                  devices={devices}
+                  hosts={hosts}
+                  uuids={new Set(groups.ready.map((d) => d.uuid))}
+                />
+                <DeviceGroup
+                  title="Inaccessible"
+                  count={groups.inaccessible.length}
+                  devices={devices}
+                  hosts={hosts}
+                  uuids={new Set(groups.inaccessible.map((d) => d.uuid))}
+                />
+              </div>
+            )}
+          </div>
+
+          <Modal
+            isDismissable
+            isOpen={Boolean(devicesUi.systemDump)}
+            onOpenChange={(open) => {
+              if (!open) app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })
+            }}
+          >
+            {devicesUi.systemDump ? (
+              <div className="dump">
+                <Heading slot="title" className="dump__title">
+                  Diagnostics: Appliance.System.All
+                </Heading>
+                <div className="dump__meta">
+                  <div className="dump__uuid">{clampText(devicesUi.systemDump.uuid, 22)}</div>
+                  <div className="dump__host">{devicesUi.systemDump.host}</div>
+                </div>
+                <pre className="dump__pre">{JSON.stringify(devicesUi.systemDump.data, null, 2)}</pre>
+                <div className="dump__actions">
+                  <Button tone="ghost" slot="close" onPress={() => app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </Modal>
+        </section>
+      </main>
+
+      {toast ? <Toast /> : null}
+    </div>
+  )
+}
+
+function DeviceGroup(props: {
+  title: string
+  count: number
+  devices: any[]
+  hosts: Record<string, any>
+  uuids: Set<string>
+}) {
+  const { title, count, devices, hosts, uuids } = props
+  const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
+
+  return (
+    <section className="deviceGroup">
+      <header className="deviceGroup__head">
+        <div className="deviceGroup__title">{title}</div>
+        <div className="chip chip--muted">{count}</div>
+      </header>
+      <div className="deviceList">
+        {filtered.map((d) => (
+          <DeviceRow key={String(d.uuid)} device={d} hostEntry={hosts[String(d.uuid)]} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: string; updatedAt?: string } | undefined }) {
+  const app = useAppActorRef()
+  const busy = useAppSelector((s) => s.context.busy)
+
+  const d = props.device
+  const uuid = String(d.uuid ?? '')
+
+  const host = props.hostEntry?.host ? String(props.hostEntry.host) : ''
+  const hostUpdatedAt = props.hostEntry?.updatedAt ? String(props.hostEntry.updatedAt) : ''
+
+  const online = String(d.onlineStatus ?? '').toLowerCase()
+  const onlineTone =
+    online.includes('online') || online === '1'
+      ? 'ok'
+      : online.includes('offline') || online === '0'
+        ? 'err'
+        : 'muted'
+
+  const title = String(d.devName ?? '') || uuid
+  const subtitle = [d.deviceType, d.subType].filter(Boolean).join(' / ')
+
+  const macCloud = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
+  const macLan = props.hostEntry?.mac ? String(props.hostEntry.mac) : ''
+  const mac = macCloud || macLan
+  const macForResolve = macCloud || macLan || ''
+
+  const ready = Boolean(host)
+  const disableToggle = busy.toggleUuid !== null
+  const disableResolve = busy.resolveUuid !== null
+
+  return (
+    <article className="device">
+      <header className="device__head">
+        <div className="device__id">
+          <div className="device__titleRow">
+            <div className="device__title">{title}</div>
+            <div className={`chip chip--${onlineTone}`}>{online || 'unknown'}</div>
+          </div>
+          <div className="device__subtitle">{subtitle || 'device'}</div>
+          <div className="device__facts">
+            <div>
+              <span className="device__factKey">ip</span>{' '}
+              <span className="device__factVal">{host ? host : '(unknown)'}</span>
             </div>
           </div>
         </div>
 
-        <div className="subpanel">
-          <div className="subpanel__title">Cloud key</div>
-          {cloud ? (
-            <div className="keyCard">
-              <div className="keyCard__kicker">{cloud.userEmail}</div>
-              <div className="keyCard__value">{cloud.key}</div>
-              <div className="actionRow">
-                <Button tone="primary" onPress={() => void copy(cloud.key)}>
-                  Copy key
-                </Button>
-                <Button tone="ghost" onPress={() => void copy(cloud.domain)}>
-                  Copy domain
-                </Button>
-              </div>
-              <div className="keyCard__note">Token is stored server-side only. This UI shows only a redacted preview.</div>
-            </div>
+        <div className="device__rowActions">
+          {!ready ? (
+            <Button
+              tone="primary"
+              onPress={() =>
+                app.send({
+                  type: 'DEVICES.RESOLVE_HOST',
+                  uuid,
+                  mac: macForResolve,
+                  title,
+                })
+              }
+              isDisabled={disableResolve}
+            >
+              Find IP
+            </Button>
           ) : (
-            <div className="emptyInline">No cloud creds yet. Go to Connect.</div>
+            <>
+              <Button
+                tone="ghost"
+                onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid, onoff: 1 })}
+                isDisabled={disableToggle}
+                isPending={busy.toggleUuid === uuid}
+              >
+                On
+              </Button>
+              <Button
+                tone="danger"
+                onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid, onoff: 0 })}
+                isDisabled={disableToggle}
+                isPending={busy.toggleUuid === uuid}
+              >
+                Off
+              </Button>
+            </>
           )}
         </div>
+      </header>
 
-        <div className="subpanel subpanel--hint">
-          Meross cloud device lists often omit MACs. If host resolution is flaky, provide a CIDR so the server can scan
-          the LAN and match devices by `uuid` (via `Appliance.System.All`). That scan may also learn the MAC for display.
+      <details className="details details--device">
+        <summary className="details__summary">Details</summary>
+        <div className="details__body">
+          <div className="device__facts device__facts--open">
+            <div>
+              <span className="device__factKey">uuid</span> <span className="device__factVal">{uuid}</span>
+            </div>
+            {mac ? (
+              <div>
+                <span className="device__factKey">mac</span> <span className="device__factVal">{mac}</span>
+              </div>
+            ) : null}
+            {hostUpdatedAt ? (
+              <div>
+                <span className="device__factKey">ip seen</span> <span className="device__factVal">{hostUpdatedAt}</span>
+              </div>
+            ) : null}
+          </div>
+
+          {ready ? (
+            <div className="actionRow mt-3">
+              <Button
+                tone="ghost"
+                onPress={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid })}
+                isDisabled={busy.diagnosticsUuid !== null || !host}
+                isPending={busy.diagnosticsUuid === uuid}
+              >
+                Fetch diagnostics
+              </Button>
+            </div>
+          ) : null}
         </div>
+      </details>
+    </article>
+  )
+}
+
+function Toast() {
+  const toast = useAppSelector((s) => s.context.toast)
+  if (!toast) return null
+
+  return (
+    <div className="toastRegion" role="status" aria-live="polite">
+      <div className={`toast toast--${toast.kind}`}>
+        <div className="toast__row">
+          <div className="toast__badge">{toast.kind === 'ok' ? 'OK' : 'ERROR'}</div>
+          <div className="toast__brand">merossity</div>
+        </div>
+        <div className="toast__title">{toast.title}</div>
+        {toast.detail ? <div className="toast__detail">{toast.detail}</div> : null}
       </div>
-    </section>
+    </div>
   )
 }
 

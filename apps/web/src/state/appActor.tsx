@@ -1,6 +1,5 @@
 import * as React from 'react'
 import { createActorContext } from '@xstate/react'
-import { getHashTab } from '../lib/nav'
 import { appMachine } from './appMachine'
 
 const getInitialCidr = (): string => {
@@ -18,7 +17,6 @@ export function AppProvider(props: { children: React.ReactNode }) {
   // Keep input stable for the lifetime of this provider.
   const input = React.useMemo(
     () => ({
-      initialTab: getHashTab(),
       initialCidr: getInitialCidr(),
     }),
     [],
@@ -29,4 +27,3 @@ export function AppProvider(props: { children: React.ReactNode }) {
 
 export const useAppActorRef = AppActorContext.useActorRef
 export const useAppSelector = AppActorContext.useSelector
-

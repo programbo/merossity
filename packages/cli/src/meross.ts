@@ -5,15 +5,31 @@ import { defineCommand } from "clerc";
 
 import {
   MerossDumpParseError,
+  defaultMerossConfigPath,
+  defaultSuggestedCidr,
+  extractLanMac,
+  extractLanUuid,
   getSystemAll,
   loadMerossCloudDumpFile,
+  loadMerossConfig,
+  merossCloudListDevices,
+  merossCloudLogin,
+  listHostsInCidr,
   pingSweep,
   resolveIpv4FromMac,
+  saveMerossConfig,
   setToggleX,
   type MerossCloudDump,
+  type MerossCloudCredentials,
+  type MerossCloudDevice,
 } from "@merossity/core/meross";
 
 const defaultDumpPath = () => path.join(os.homedir(), ".config", "merossity", "meross-cloud-dump.json");
+const nowIso = () => new Date().toISOString();
+
+const configPath = () => process.env.MEROSS_CONFIG_PATH || defaultMerossConfigPath();
+const readConfig = async () => await loadMerossConfig(configPath());
+const writeConfig = async (next: Awaited<ReturnType<typeof readConfig>>) => await saveMerossConfig(next, configPath());
 
 const loadDumpMaybe = async (dumpPath?: string): Promise<MerossCloudDump | null> => {
   const candidate = dumpPath ?? process.env.MEROSS_DUMP ?? defaultDumpPath();
@@ -82,6 +98,148 @@ const resolveHost = async (args: {
 
 export const merossCommands = () => {
   return [
+    defineCommand(
+      {
+        name: "meross:login",
+        description: "Login to Meross cloud and persist cloud key/token to ~/.config/merossity/config.json",
+        flags: {
+          email: { type: String, description: "Meross cloud email", required: true },
+          password: { type: String, description: "Meross cloud password", required: true },
+          totp: { type: String, description: "TOTP (6 digits)", required: true },
+          domain: { type: String, description: "Override cloud domain (rare)" },
+          scheme: { type: String, description: 'Override scheme ("https" or "http")', default: "https" },
+          timeoutMs: { type: Number, description: "HTTP timeout ms (default: 15000)", default: 15000 },
+        },
+      },
+      async ({ flags }) => {
+        const totp = String(flags.totp ?? "").trim();
+        if (!/^[0-9]{6}$/.test(totp)) {
+          throw new Error('Invalid "--totp". Expected 6 digits.');
+        }
+
+        if (flags.scheme !== "https" && flags.scheme !== "http") {
+          throw new Error('Invalid "--scheme". Expected "https" or "http".');
+        }
+
+        const res = await merossCloudLogin(
+          { email: String(flags.email), password: String(flags.password), mfaCode: totp },
+          {
+            domain: flags.domain ? String(flags.domain) : undefined,
+            scheme: flags.scheme,
+            timeoutMs: Number.isFinite(flags.timeoutMs) ? Number(flags.timeoutMs) : undefined,
+          },
+        );
+
+        const cfg = await readConfig();
+        await writeConfig({ ...cfg, cloud: { ...res.creds, updatedAt: nowIso() } });
+
+        const keyPreview = res.creds.key ? `${res.creds.key.slice(0, 4)}…${res.creds.key.slice(-4)}` : "";
+        console.log(JSON.stringify({ userEmail: res.creds.userEmail, domain: res.creds.domain, key: keyPreview }));
+      },
+    ),
+
+    defineCommand(
+      {
+        name: "meross:devices:refresh",
+        description: "Fetch cloud device list and persist it to ~/.config/merossity/config.json",
+        flags: {
+          timeoutMs: { type: Number, description: "HTTP timeout ms (default: 15000)", default: 15000 },
+          json: { type: Boolean, description: "Print raw JSON list", negatable: false },
+        },
+      },
+      async ({ flags }) => {
+        const cfg = await readConfig();
+        if (!cfg.cloud) {
+          throw new Error("Not logged in. Run meross:login first.");
+        }
+
+        const list = await merossCloudListDevices(cfg.cloud as MerossCloudCredentials, {
+          timeoutMs: Number.isFinite(flags.timeoutMs) ? Number(flags.timeoutMs) : undefined,
+        });
+
+        await writeConfig({ ...cfg, devices: { updatedAt: nowIso(), list: list as MerossCloudDevice[] } });
+
+        if (flags.json) {
+          console.log(JSON.stringify(list, null, 2));
+          return;
+        }
+
+        console.log(JSON.stringify({ count: list.length }));
+      },
+    ),
+
+    defineCommand(
+      {
+        name: "meross:hosts:discover",
+        description: "Scan LAN for Meross devices (Appliance.System.All) and persist IP/MACs to config",
+        flags: {
+          cidr: { type: String, description: "CIDR to scan (default: auto-suggested)" },
+          timeoutMs: { type: Number, description: "Per-host HTTP timeout ms (default: 900)", default: 900 },
+          concurrency: { type: Number, description: "Parallelism (default: 24)", default: 24 },
+          json: { type: Boolean, description: "Print raw hosts map", negatable: false },
+        },
+      },
+      async ({ flags }) => {
+        const cfg = await readConfig();
+        const key = cfg.cloud?.key || process.env.MEROSS_KEY;
+        if (!key) {
+          throw new Error('Missing Meross key. Run meross:login (or set MEROSS_KEY).');
+        }
+
+        const cidr = String(flags.cidr ?? "").trim() || defaultSuggestedCidr() || "";
+        if (!cidr) {
+          throw new Error('Missing CIDR and no auto-suggested CIDR found. Pass "--cidr <x.x.x.x/yy>".');
+        }
+
+        // Best-effort: populate neighbor tables to improve MAC-based resolution on some systems.
+        await pingSweep(cidr, { timeoutMs: 200, concurrency: 64 }).catch(() => {});
+
+        let ips: string[];
+        try {
+          ips = listHostsInCidr(cidr);
+        } catch {
+          throw new Error(`Invalid CIDR: ${cidr}`);
+        }
+
+        const perHostTimeoutMs = Math.max(200, Number(flags.timeoutMs ?? 900));
+        const concurrency = Math.max(1, Math.floor(Number(flags.concurrency ?? 24)));
+
+        let i = 0;
+        const found: Record<string, { host: string; updatedAt: string; mac?: string }> = {};
+
+        await Promise.all(
+          Array.from({ length: concurrency }, () =>
+            (async () => {
+              for (;;) {
+                const idx = i++;
+                if (idx >= ips.length) return;
+                const ip = ips[idx]!;
+
+                try {
+                  const resp = await getSystemAll<any>({ host: ip, key, timeoutMs: perHostTimeoutMs });
+                  const uuid = extractLanUuid(resp);
+                  if (!uuid) continue;
+                  const mac = extractLanMac(resp) ?? undefined;
+                  found[uuid] = { host: ip, updatedAt: nowIso(), ...(mac ? { mac } : {}) };
+                } catch {
+                  // ignore
+                }
+              }
+            })(),
+          ),
+        );
+
+        await writeConfig({ ...cfg, hosts: { ...cfg.hosts, ...found } });
+
+        if (flags.json) {
+          console.log(JSON.stringify({ cidr, hosts: found }, null, 2));
+          return;
+        }
+
+        console.log(JSON.stringify({ cidr, count: Object.keys(found).length }));
+      },
+    ),
+
     defineCommand(
       {
         name: "meross:devices",

@@ -1,7 +1,5 @@
 import { assertEvent, assign, fromPromise, raise, setup } from 'xstate'
 import { ApiError, apiGet, apiPost } from '../lib/api'
-import type { Tab } from '../lib/nav'
-import { setHashTab } from '../lib/nav'
 import type { CloudSummary, MerossCloudDevice, StatusResponse } from '../lib/types'
 
 export type HostsMap = Record<string, { host: string; updatedAt: string; mac?: string }>
@@ -15,17 +13,27 @@ export type ToastData = {
 type SystemDump = { uuid: string; host: string; data: unknown }
 
 type ConnectState = {
+  // Hidden behind "Advanced" in the UI. When enabled, the server uses MEROSS_EMAIL/MEROSS_PASSWORD defaults.
   useEnv: boolean
   email: string
   password: string
-  mfaCode: string
-  mfaRequired: boolean
+  totp: string
 }
 
 type DevicesUiState = {
   cidr: string
-  expandedUuid: string | null
   systemDump: SystemDump | null
+}
+
+type BusyState = {
+  bootstrap: boolean
+  login: boolean
+  refreshDevices: boolean
+  suggestCidr: boolean
+  scanLan: boolean
+  resolveUuid: string | null
+  toggleUuid: string | null
+  diagnosticsUuid: string | null
 }
 
 type BootstrapData = {
@@ -36,34 +44,27 @@ type BootstrapData = {
 }
 
 export type AppMachineInput = {
-  initialTab: Tab
   initialCidr: string
 }
 
 type AppContext = {
-  tab: Tab
   status: StatusResponse | null
   cloud: CloudSummary | null
   devices: MerossCloudDevice[]
   hosts: HostsMap
-  busy: string | null
+  busy: BusyState
   connect: ConnectState
   devicesUi: DevicesUiState
   toast: ToastData | null
 }
 
 type AppEvent =
-  | { type: 'NAVIGATE'; tab: Tab }
-  | { type: 'HASH_CHANGED'; tab: Tab }
-  | { type: 'REFRESH_ALL' }
   | { type: 'CONNECT.SET_USE_ENV'; useEnv: boolean }
   | { type: 'CONNECT.SET_EMAIL'; email: string }
   | { type: 'CONNECT.SET_PASSWORD'; password: string }
-  | { type: 'CONNECT.SET_MFA_CODE'; mfaCode: string }
-  | { type: 'CONNECT.RESET_MFA' }
+  | { type: 'CONNECT.SET_TOTP'; totp: string }
   | { type: 'CONNECT.SUBMIT' }
   | { type: 'DEVICES.SET_CIDR'; cidr: string }
-  | { type: 'DEVICES.TOGGLE_EXPANDED'; uuid: string }
   | { type: 'DEVICES.CLOSE_SYSTEM_DUMP' }
   | { type: 'DEVICES.REFRESH_FROM_CLOUD' }
   | { type: 'DEVICES.DISCOVER_HOSTS' }
@@ -74,6 +75,7 @@ type AppEvent =
   | { type: 'TOAST.DISMISS' }
 
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
+const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
 
 export const appMachine = setup({
   types: {
@@ -82,10 +84,30 @@ export const appMachine = setup({
     input: {} as AppMachineInput,
   },
   actions: {
-    setTab: assign((_, params: { tab: Tab }) => ({ tab: params.tab })),
-    syncHashTab: (_, params: { tab: Tab }) => setHashTab(params.tab),
-
-    setBusy: assign((_, params: { busy: string | null }) => ({ busy: params.busy })),
+    setBootstrapBusy: assign(({ context }, params: { busy: boolean }) => ({
+      busy: { ...context.busy, bootstrap: params.busy },
+    })),
+    setLoginBusy: assign(({ context }, params: { busy: boolean }) => ({
+      busy: { ...context.busy, login: params.busy },
+    })),
+    setRefreshDevicesBusy: assign(({ context }, params: { busy: boolean }) => ({
+      busy: { ...context.busy, refreshDevices: params.busy },
+    })),
+    setSuggestCidrBusy: assign(({ context }, params: { busy: boolean }) => ({
+      busy: { ...context.busy, suggestCidr: params.busy },
+    })),
+    setScanLanBusy: assign(({ context }, params: { busy: boolean }) => ({
+      busy: { ...context.busy, scanLan: params.busy },
+    })),
+    setResolveBusy: assign(({ context }, params: { uuid: string | null }) => ({
+      busy: { ...context.busy, resolveUuid: params.uuid },
+    })),
+    setToggleBusy: assign(({ context }, params: { uuid: string | null }) => ({
+      busy: { ...context.busy, toggleUuid: params.uuid },
+    })),
+    setDiagnosticsBusy: assign(({ context }, params: { uuid: string | null }) => ({
+      busy: { ...context.busy, diagnosticsUuid: params.uuid },
+    })),
 
     setStatus: assign((_, params: { status: StatusResponse | null }) => ({ status: params.status })),
     setCloud: assign((_, params: { cloud: CloudSummary | null }) => ({ cloud: params.cloud })),
@@ -101,17 +123,21 @@ export const appMachine = setup({
     setPassword: assign(({ context }, params: { password: string }) => ({
       connect: { ...context.connect, password: params.password },
     })),
-    setMfaCode: assign(({ context }, params: { mfaCode: string }) => ({
-      connect: { ...context.connect, mfaCode: params.mfaCode },
+    setTotp: assign(({ context }, params: { totp: string }) => ({
+      connect: { ...context.connect, totp: params.totp },
     })),
-    setMfaRequired: assign(({ context }, params: { mfaRequired: boolean }) => ({
-      connect: { ...context.connect, mfaRequired: params.mfaRequired },
+    clearSensitiveConnect: assign(({ context }) => ({
+      connect: { ...context.connect, password: '', totp: '' },
     })),
-    clearMfa: assign(({ context }) => ({ connect: { ...context.connect, mfaRequired: false, mfaCode: '' } })),
 
     setCidr: assign(({ context }, params: { cidr: string }) => ({
       devicesUi: { ...context.devicesUi, cidr: params.cidr },
     })),
+    setCidrIfEmpty: assign(({ context }, params: { cidr: string }) => {
+      const cur = context.devicesUi.cidr.trim()
+      if (cur) return {}
+      return { devicesUi: { ...context.devicesUi, cidr: params.cidr } }
+    }),
     persistCidr: ({ context }) => {
       try {
         if (typeof localStorage === 'undefined') return
@@ -120,12 +146,6 @@ export const appMachine = setup({
         // ignore
       }
     },
-    toggleExpanded: assign(({ context }, params: { uuid: string }) => ({
-      devicesUi: {
-        ...context.devicesUi,
-        expandedUuid: context.devicesUi.expandedUuid === params.uuid ? null : params.uuid,
-      },
-    })),
     clearSystemDump: assign(({ context }) => ({ devicesUi: { ...context.devicesUi, systemDump: null } })),
     setSystemDump: assign(({ context }, params: { systemDump: SystemDump | null }) => ({
       devicesUi: { ...context.devicesUi, systemDump: params.systemDump },
@@ -134,7 +154,19 @@ export const appMachine = setup({
     setToast: assign((_, params: { toast: ToastData | null }) => ({ toast: params.toast })),
   },
   guards: {
-    hasCloud: ({ context }) => Boolean(context.cloud),
+    isCloudLinked: ({ context }) => Boolean(context.cloud?.key),
+    needsCidrSuggest: ({ context }) => !context.devicesUi.cidr.trim(),
+    canSubmitLogin: ({ context }) => {
+      const totpOk = isTotpValid(context.connect.totp)
+      if (!totpOk) return false
+
+      if (context.connect.useEnv) {
+        const st = context.status
+        return Boolean(st?.env.hasEmail && st?.env.hasPassword)
+      }
+
+      return Boolean(context.connect.email.trim() && context.connect.password)
+    },
   },
   actors: {
     bootstrap: fromPromise(async (): Promise<BootstrapData> => {
@@ -165,29 +197,20 @@ export const appMachine = setup({
       return { status, cloud, devices: devicesRes.list, hosts: hostsRes.hosts }
     }),
 
-    refreshAll: fromPromise(async (): Promise<BootstrapData> => {
-      const status = await apiGet<StatusResponse>('/api/status')
-      const cloud = await apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
-        .then((r) => r.cloud)
-        .catch(() => null)
-      const devicesRes = await apiGet<{ updatedAt: string | null; list: MerossCloudDevice[] }>('/api/cloud/devices')
-      const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
-      return { status, cloud, devices: devicesRes.list, hosts: hostsRes.hosts }
-    }),
-
-    loginFlow: fromPromise(
-      async ({ input }: { input: { useEnv: boolean; email: string; password: string; mfaCode: string } }) => {
+    loginFlow: fromPromise(async ({ input }: { input: { useEnv: boolean; email: string; password: string; totp: string } }) => {
       const body: any = {}
 
       if (!input.useEnv) {
-        body.email = input.email
+        body.email = input.email.trim()
         body.password = input.password
       } else {
         // Allow overrides while defaulting to env creds on the server.
         if (input.email.trim()) body.email = input.email.trim()
         if (input.password) body.password = input.password
       }
-      if (input.mfaCode.trim()) body.mfaCode = input.mfaCode.trim()
+
+      // Always sent (UI requires it). If the account doesn't use MFA, the cloud should ignore it.
+      body.mfaCode = input.totp.trim()
 
       const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
       const [status, cloud] = await Promise.all([
@@ -197,11 +220,14 @@ export const appMachine = setup({
           .catch(() => null),
       ])
       return { status, cloud, resCloud: res.cloud }
-      },
-    ),
+    }),
 
     refreshDevicesFromCloud: fromPromise(async () => {
       return await apiPost<{ count: number; list: MerossCloudDevice[] }>('/api/cloud/devices/refresh', {})
+    }),
+
+    cidrSuggest: fromPromise(async () => {
+      return await apiGet<{ suggestions: Array<{ cidr: string }>; default: string | null }>('/api/lan/cidr-suggest')
     }),
 
     resolveHost: fromPromise(async ({ input }: { input: { uuid: string; mac: string; cidr: string; title: string } }) => {
@@ -236,53 +262,45 @@ export const appMachine = setup({
   id: 'merossityApp',
   type: 'parallel',
   context: ({ input }) => ({
-    tab: input.initialTab,
     status: null,
     cloud: null,
     devices: [],
     hosts: {},
-    busy: null,
-    connect: { useEnv: true, email: '', password: '', mfaCode: '', mfaRequired: false },
-    devicesUi: { cidr: input.initialCidr, expandedUuid: null, systemDump: null },
+    busy: {
+      bootstrap: false,
+      login: false,
+      refreshDevices: false,
+      suggestCidr: false,
+      scanLan: false,
+      resolveUuid: null,
+      toggleUuid: null,
+      diagnosticsUuid: null,
+    },
+    connect: { useEnv: false, email: '', password: '', totp: '' },
+    devicesUi: { cidr: input.initialCidr, systemDump: null },
     toast: null,
   }),
   on: {
-    NAVIGATE: {
-      actions: [
-        { type: 'setTab', params: ({ event }) => ({ tab: event.tab }) },
-        { type: 'syncHashTab', params: ({ event }) => ({ tab: event.tab }) },
-      ],
-    },
-    HASH_CHANGED: { actions: { type: 'setTab', params: ({ event }) => ({ tab: event.tab }) } },
-
     'CONNECT.SET_USE_ENV': { actions: { type: 'setUseEnv', params: ({ event }) => ({ useEnv: event.useEnv }) } },
     'CONNECT.SET_EMAIL': { actions: { type: 'setEmail', params: ({ event }) => ({ email: event.email }) } },
     'CONNECT.SET_PASSWORD': { actions: { type: 'setPassword', params: ({ event }) => ({ password: event.password }) } },
-    'CONNECT.SET_MFA_CODE': { actions: { type: 'setMfaCode', params: ({ event }) => ({ mfaCode: event.mfaCode }) } },
-    'CONNECT.RESET_MFA': {
-      actions: [
-        { type: 'clearMfa' },
-        raise({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Cleared verification prompt' } }),
-      ],
-    },
+    'CONNECT.SET_TOTP': { actions: { type: 'setTotp', params: ({ event }) => ({ totp: event.totp }) } },
 
     'DEVICES.SET_CIDR': { actions: { type: 'setCidr', params: ({ event }) => ({ cidr: event.cidr }) } },
-    'DEVICES.TOGGLE_EXPANDED': { actions: { type: 'toggleExpanded', params: ({ event }) => ({ uuid: event.uuid }) } },
     'DEVICES.CLOSE_SYSTEM_DUMP': { actions: { type: 'clearSystemDump' } },
-
   },
   states: {
     app: {
       initial: 'booting',
       states: {
         booting: {
-          entry: { type: 'setBusy', params: () => ({ busy: 'bootstrap' }) },
+          entry: { type: 'setBootstrapBusy', params: () => ({ busy: true }) },
           invoke: {
             src: 'bootstrap',
             onDone: {
-              target: 'idle',
+              target: 'gate',
               actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
+                { type: 'setBootstrapBusy', params: () => ({ busy: false }) },
                 { type: 'setStatus', params: ({ event }) => ({ status: event.output.status }) },
                 { type: 'setCloud', params: ({ event }) => ({ cloud: event.output.cloud }) },
                 { type: 'setDevices', params: ({ event }) => ({ devices: event.output.devices }) },
@@ -290,9 +308,9 @@ export const appMachine = setup({
               ],
             },
             onError: {
-              target: 'idle',
+              target: 'gate',
               actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
+                { type: 'setBootstrapBusy', params: () => ({ busy: false }) },
                 raise(({ event }) => ({
                   type: 'TOAST.SHOW',
                   toast: { kind: 'err', title: 'Bootstrap failed', detail: String(event.error ?? '') },
@@ -302,353 +320,368 @@ export const appMachine = setup({
           },
         },
 
-        idle: {
-          on: {
-            REFRESH_ALL: { target: 'refreshing' },
-            'CONNECT.SUBMIT': { target: 'loggingIn' },
-            'DEVICES.REFRESH_FROM_CLOUD': [
-              { guard: 'hasCloud', target: 'refreshingDevicesFromCloud' },
-              {
-                actions: raise({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'err', title: 'Not linked', detail: 'Link cloud first.' },
-                }),
-              },
-            ],
-            'DEVICES.DISCOVER_HOSTS': { target: 'discoveringHosts' },
-            'DEVICES.RESOLVE_HOST': { target: 'resolvingHost' },
-            'DEVICES.TOGGLE': [
-              {
-                guard: ({ context, event }) => {
-                  assertEvent(event, 'DEVICES.TOGGLE')
-                  return Boolean(context.hosts[event.uuid]?.host)
-                },
-                target: 'togglingLan',
-              },
-              {
-                actions: raise({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'err', title: 'Host not resolved', detail: 'Resolve host first.' },
-                }),
-              },
-            ],
-            'DEVICES.SYSTEM_SNAPSHOT': [
-              {
-                guard: ({ context, event }) => {
-                  assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
-                  return Boolean(context.hosts[event.uuid]?.host)
-                },
-                target: 'fetchingSnapshot',
-              },
-              {
-                actions: raise({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'err', title: 'Host not resolved', detail: 'Resolve host first.' },
-                }),
-              },
-            ],
-          },
-        },
-
-        refreshing: {
-          entry: { type: 'setBusy', params: () => ({ busy: 'refresh_all' }) },
-          invoke: {
-            src: 'refreshAll',
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                { type: 'setStatus', params: ({ event }) => ({ status: event.output.status }) },
-                { type: 'setCloud', params: ({ event }) => ({ cloud: event.output.cloud }) },
-                { type: 'setDevices', params: ({ event }) => ({ devices: event.output.devices }) },
-                { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hosts }) },
-                raise({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Synced local' } }),
+        gate: {
+          initial: 'deciding',
+          states: {
+            deciding: {
+              always: [
+                { guard: 'isCloudLinked', target: 'hasCloudKey' },
+                { target: 'needsCloudKey.editing' },
               ],
             },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'Sync failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
+
+            needsCloudKey: {
+              initial: 'editing',
+              states: {
+                editing: {
+                  on: {
+                    'CONNECT.SUBMIT': [
+                      { guard: 'canSubmitLogin', target: 'submitting' },
+                      // Button should be disabled when invalid; keep this as a no-op fallback.
+                      { actions: [] },
+                    ],
                   },
-                })),
-              ],
+                },
+                submitting: {
+                  entry: { type: 'setLoginBusy', params: () => ({ busy: true }) },
+                  invoke: {
+                    src: 'loginFlow',
+                    input: ({ context }) => ({
+                      useEnv: context.connect.useEnv,
+                      email: context.connect.email,
+                      password: context.connect.password,
+                      totp: context.connect.totp,
+                    }),
+                    onDone: {
+                      target: '#merossityApp.app.gate.hasCloudKey',
+                      actions: [
+                        { type: 'setLoginBusy', params: () => ({ busy: false }) },
+                        { type: 'clearSensitiveConnect' },
+                        { type: 'setStatus', params: ({ event }) => ({ status: event.output.status }) },
+                        { type: 'setCloud', params: ({ event }) => ({ cloud: event.output.cloud }) },
+                        raise(({ event }) => ({
+                          type: 'TOAST.SHOW',
+                          toast: { kind: 'ok', title: 'Cloud linked', detail: `Domain: ${event.output.resCloud.domain}` },
+                        })),
+                      ],
+                    },
+                    onError: {
+                      target: 'editing',
+                      actions: [
+                        { type: 'setLoginBusy', params: () => ({ busy: false }) },
+                        raise(({ event }) => {
+                          const e = event.error
+                          if (e instanceof ApiError && e.code === 'missing_creds') {
+                            return {
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'err', title: 'Missing credentials', detail: e.message },
+                            }
+                          }
+                          return {
+                            type: 'TOAST.SHOW',
+                            toast: { kind: 'err', title: 'Login failed', detail: e instanceof Error ? e.message : String(e) },
+                          }
+                        }),
+                      ],
+                    },
+                  },
+                },
+              },
             },
-          },
-        },
 
-        loggingIn: {
-          entry: { type: 'setBusy', params: () => ({ busy: 'login' }) },
-          invoke: {
-            src: 'loginFlow',
-            input: ({ context }) => ({
-              useEnv: context.connect.useEnv,
-              email: context.connect.email,
-              password: context.connect.password,
-              mfaCode: context.connect.mfaCode,
-            }),
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                { type: 'clearMfa' },
-                { type: 'setStatus', params: ({ event }) => ({ status: event.output.status }) },
-                { type: 'setCloud', params: ({ event }) => ({ cloud: event.output.cloud }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'ok', title: 'Cloud linked', detail: `Domain: ${event.output.resCloud.domain}` },
-                })),
-                { type: 'setTab', params: () => ({ tab: 'devices' as const }) },
-                { type: 'syncHashTab', params: () => ({ tab: 'devices' as const }) },
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                assign(({ context, event }) => {
-                  const e = event.error
-                  if (e instanceof ApiError && e.code === 'mfa_required') {
-                    return { connect: { ...context.connect, mfaRequired: true } }
-                  }
-                  return {}
-                }),
-                raise(({ event }) => {
-                  const e = event.error
-                  if (e instanceof ApiError && e.code === 'mfa_required') {
-                    return {
-                      type: 'TOAST.SHOW',
-                      toast: {
-                        kind: 'err',
-                        title: 'Verification required',
-                        detail: 'Enter your TOTP code and try again.',
+            hasCloudKey: {
+              type: 'parallel',
+              entry: [raise({ type: 'DEVICES.REFRESH_FROM_CLOUD' }), raise({ type: 'DEVICES.DISCOVER_HOSTS' })],
+              states: {
+                inventory: {
+                  initial: 'idle',
+                  states: {
+                    idle: {
+                      on: {
+                        'DEVICES.REFRESH_FROM_CLOUD': { target: 'refreshing' },
                       },
-                    }
-                  }
-                  return {
-                    type: 'TOAST.SHOW',
-                    toast: { kind: 'err', title: 'Login failed', detail: e instanceof Error ? e.message : String(e) },
-                  }
-                }),
-              ],
-            },
-          },
-        },
-
-        refreshingDevicesFromCloud: {
-          entry: { type: 'setBusy', params: () => ({ busy: 'refresh_devices' }) },
-          invoke: {
-            src: 'refreshDevicesFromCloud',
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                { type: 'setDevices', params: ({ event }) => ({ devices: event.output.list }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'ok', title: 'Devices updated', detail: `${event.output.count} devices from cloud.` },
-                })),
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'Refresh failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
+                    },
+                    refreshing: {
+                      entry: { type: 'setRefreshDevicesBusy', params: () => ({ busy: true }) },
+                      invoke: {
+                        src: 'refreshDevicesFromCloud',
+                        onDone: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setRefreshDevicesBusy', params: () => ({ busy: false }) },
+                            { type: 'setDevices', params: ({ event }) => ({ devices: event.output.list }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'ok', title: 'Devices updated', detail: `${event.output.count} devices from cloud.` },
+                            })),
+                          ],
+                        },
+                        onError: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setRefreshDevicesBusy', params: () => ({ busy: false }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'err',
+                                title: 'Refresh failed',
+                                detail: event.error instanceof Error ? event.error.message : String(event.error),
+                              },
+                            })),
+                          ],
+                        },
+                      },
+                    },
                   },
-                })),
-              ],
-            },
-          },
-        },
-
-        discoveringHosts: {
-          entry: [
-            { type: 'persistCidr' },
-            { type: 'setBusy', params: () => ({ busy: 'discover_hosts' }) },
-          ],
-          invoke: {
-            src: 'discoverHosts',
-            input: ({ context }) => ({ cidr: context.devicesUi.cidr }),
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hostsAll }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'ok',
-                    title: 'LAN discovery complete',
-                    detail: `${event.output.count} devices found (${event.output.cidr}).`,
-                  },
-                })),
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'LAN discovery failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
-                  },
-                })),
-              ],
-            },
-          },
-        },
-
-        resolvingHost: {
-          entry: [
-            { type: 'persistCidr' },
-            {
-              type: 'setBusy',
-              params: ({ event }) => {
-                assertEvent(event, 'DEVICES.RESOLVE_HOST')
-                return { busy: `resolve:${event.uuid}` }
-              },
-            },
-          ],
-          invoke: {
-            src: 'resolveHost',
-            input: ({ context, event }) => {
-              assertEvent(event, 'DEVICES.RESOLVE_HOST')
-              return { uuid: event.uuid, mac: event.mac, title: event.title, cidr: context.devicesUi.cidr }
-            },
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hosts }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'ok',
-                    title: 'Host resolved',
-                    detail: `${event.output.title}: ${event.output.resolved.host}`,
-                  },
-                })),
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'Host resolve failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
-                  },
-                })),
-              ],
-            },
-          },
-        },
-
-        togglingLan: {
-          entry: {
-            type: 'setBusy',
-            params: ({ event }) => {
-              assertEvent(event, 'DEVICES.TOGGLE')
-              return { busy: `toggle:${event.uuid}` }
-            },
-          },
-          invoke: {
-            src: 'toggleLan',
-            input: ({ event }) => {
-              assertEvent(event, 'DEVICES.TOGGLE')
-              return { uuid: event.uuid, onoff: event.onoff }
-            },
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'ok',
-                    title: event.output.onoff ? 'Switched on' : 'Switched off',
-                    detail: clampText(event.output.uuid, 12),
-                  },
-                })),
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'Toggle failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
-                  },
-                })),
-              ],
-            },
-          },
-        },
-
-        fetchingSnapshot: {
-          entry: {
-            type: 'setBusy',
-            params: ({ event }) => {
-              assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
-              return { busy: `system:${event.uuid}` }
-            },
-          },
-          invoke: {
-            src: 'systemSnapshot',
-            input: ({ event }) => {
-              assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
-              return { uuid: event.uuid }
-            },
-            onDone: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                {
-                  type: 'setSystemDump',
-                  params: ({ event }) => ({
-                    systemDump: { uuid: event.output.uuid, host: event.output.host, data: event.output.data },
-                  }),
                 },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: { kind: 'ok', title: 'Fetched system snapshot', detail: event.output.host },
-                })),
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                { type: 'setBusy', params: () => ({ busy: null }) },
-                raise(({ event }) => ({
-                  type: 'TOAST.SHOW',
-                  toast: {
-                    kind: 'err',
-                    title: 'System snapshot failed',
-                    detail: event.error instanceof Error ? event.error.message : String(event.error),
+
+                scan: {
+                  initial: 'idle',
+                  states: {
+                    idle: {
+                      on: {
+                        'DEVICES.DISCOVER_HOSTS': [
+                          { guard: 'needsCidrSuggest', target: 'suggestingCidr' },
+                          { target: 'discoveringHosts' },
+                        ],
+                      },
+                    },
+
+                    suggestingCidr: {
+                      entry: { type: 'setSuggestCidrBusy', params: () => ({ busy: true }) },
+                      invoke: {
+                        src: 'cidrSuggest',
+                        onDone: {
+                          target: 'discoveringHosts',
+                          actions: [
+                            { type: 'setSuggestCidrBusy', params: () => ({ busy: false }) },
+                            { type: 'setCidrIfEmpty', params: ({ event }) => ({ cidr: event.output.default ?? '' }) },
+                          ],
+                        },
+                        onError: {
+                          target: 'discoveringHosts',
+                          actions: [{ type: 'setSuggestCidrBusy', params: () => ({ busy: false }) }],
+                        },
+                      },
+                    },
+
+                    discoveringHosts: {
+                      entry: [{ type: 'persistCidr' }, { type: 'setScanLanBusy', params: () => ({ busy: true }) }],
+                      invoke: {
+                        src: 'discoverHosts',
+                        input: ({ context }) => ({ cidr: context.devicesUi.cidr }),
+                        onDone: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setScanLanBusy', params: () => ({ busy: false }) },
+                            { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hostsAll }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'ok',
+                                title: 'LAN scan complete',
+                                detail: `${event.output.count} devices found (${event.output.cidr}).`,
+                              },
+                            })),
+                          ],
+                        },
+                        onError: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setScanLanBusy', params: () => ({ busy: false }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'err',
+                                title: 'LAN scan failed',
+                                detail: event.error instanceof Error ? event.error.message : String(event.error),
+                              },
+                            })),
+                          ],
+                        },
+                      },
+                    },
                   },
-                })),
-              ],
+                },
+
+                control: {
+                  initial: 'idle',
+                  states: {
+                    idle: {
+                      on: {
+                        'DEVICES.RESOLVE_HOST': { target: 'resolvingHost' },
+                        'DEVICES.TOGGLE': [
+                          {
+                            guard: ({ context, event }) => {
+                              assertEvent(event, 'DEVICES.TOGGLE')
+                              return Boolean(context.hosts[event.uuid]?.host)
+                            },
+                            target: 'togglingLan',
+                          },
+                          {
+                            actions: raise({
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'err', title: 'Host not resolved', detail: 'Find IP first.' },
+                            }),
+                          },
+                        ],
+                        'DEVICES.SYSTEM_SNAPSHOT': [
+                          {
+                            guard: ({ context, event }) => {
+                              assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
+                              return Boolean(context.hosts[event.uuid]?.host)
+                            },
+                            target: 'fetchingSnapshot',
+                          },
+                          {
+                            actions: raise({
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'err', title: 'Host not resolved', detail: 'Find IP first.' },
+                            }),
+                          },
+                        ],
+                      },
+                    },
+
+                    resolvingHost: {
+                      entry: [
+                        { type: 'persistCidr' },
+                        {
+                          type: 'setResolveBusy',
+                          params: ({ event }) => {
+                            assertEvent(event, 'DEVICES.RESOLVE_HOST')
+                            return { uuid: event.uuid }
+                          },
+                        },
+                      ],
+                      invoke: {
+                        src: 'resolveHost',
+                        input: ({ context, event }) => {
+                          assertEvent(event, 'DEVICES.RESOLVE_HOST')
+                          return { uuid: event.uuid, mac: event.mac, title: event.title, cidr: context.devicesUi.cidr }
+                        },
+                        onDone: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setResolveBusy', params: () => ({ uuid: null }) },
+                            { type: 'setHosts', params: ({ event }) => ({ hosts: event.output.hosts }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'ok', title: 'IP found', detail: `${event.output.title}: ${event.output.resolved.host}` },
+                            })),
+                          ],
+                        },
+                        onError: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setResolveBusy', params: () => ({ uuid: null }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'err',
+                                title: 'Find IP failed',
+                                detail: event.error instanceof Error ? event.error.message : String(event.error),
+                              },
+                            })),
+                          ],
+                        },
+                      },
+                    },
+
+                    togglingLan: {
+                      entry: {
+                        type: 'setToggleBusy',
+                        params: ({ event }) => {
+                          assertEvent(event, 'DEVICES.TOGGLE')
+                          return { uuid: event.uuid }
+                        },
+                      },
+                      invoke: {
+                        src: 'toggleLan',
+                        input: ({ event }) => {
+                          assertEvent(event, 'DEVICES.TOGGLE')
+                          return { uuid: event.uuid, onoff: event.onoff }
+                        },
+                        onDone: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setToggleBusy', params: () => ({ uuid: null }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'ok',
+                                title: event.output.onoff ? 'Switched on' : 'Switched off',
+                                detail: clampText(event.output.uuid, 12),
+                              },
+                            })),
+                          ],
+                        },
+                        onError: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setToggleBusy', params: () => ({ uuid: null }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'err',
+                                title: 'Toggle failed',
+                                detail: event.error instanceof Error ? event.error.message : String(event.error),
+                              },
+                            })),
+                          ],
+                        },
+                      },
+                    },
+
+                    fetchingSnapshot: {
+                      entry: {
+                        type: 'setDiagnosticsBusy',
+                        params: ({ event }) => {
+                          assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
+                          return { uuid: event.uuid }
+                        },
+                      },
+                      invoke: {
+                        src: 'systemSnapshot',
+                        input: ({ event }) => {
+                          assertEvent(event, 'DEVICES.SYSTEM_SNAPSHOT')
+                          return { uuid: event.uuid }
+                        },
+                        onDone: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setDiagnosticsBusy', params: () => ({ uuid: null }) },
+                            {
+                              type: 'setSystemDump',
+                              params: ({ event }) => ({
+                                systemDump: { uuid: event.output.uuid, host: event.output.host, data: event.output.data },
+                              }),
+                            },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: { kind: 'ok', title: 'Diagnostics fetched', detail: event.output.host },
+                            })),
+                          ],
+                        },
+                        onError: {
+                          target: 'idle',
+                          actions: [
+                            { type: 'setDiagnosticsBusy', params: () => ({ uuid: null }) },
+                            raise(({ event }) => ({
+                              type: 'TOAST.SHOW',
+                              toast: {
+                                kind: 'err',
+                                title: 'Diagnostics failed',
+                                detail: event.error instanceof Error ? event.error.message : String(event.error),
+                              },
+                            })),
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
