@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Heading } from 'react-aria-components'
 import { groupDevicesForControl } from '@merossity/core/meross/inventory'
 import './index.css'
+import { apiPost } from './lib/api'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
 import { Button } from './ui/rac/Button'
 import { Modal } from './ui/rac/Modal'
@@ -15,6 +16,16 @@ const INPUT_PASSWORD = { ...INPUT_COMMON, type: 'password' as const } as const
 const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as const
 
 const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
+
+type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
+type LanState = { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[]; updatedAt: number }
+
+type HostEntry = { host?: string; mac?: string; updatedAt?: string } | undefined
+
+const prefersToggleFor = (d: { deviceType?: unknown; subType?: unknown }) => {
+  const typeKey = `${String(d.deviceType ?? '')} ${String(d.subType ?? '')}`.toLowerCase()
+  return typeKey.includes('msl') || typeKey.includes('mss') || typeKey.includes('light') || typeKey.includes('switch')
+}
 
 export function App() {
   return (
@@ -112,9 +123,7 @@ function KeyGateView() {
                 <div className="callout">
                   <div>
                     <div className="callout__title">Server env credentials</div>
-                    <div className="callout__copy">
-                      Email/password: {envReady ? 'present' : 'missing'}.
-                    </div>
+                    <div className="callout__copy">Email/password: {envReady ? 'present' : 'missing'}.</div>
                   </div>
                   <div className="callout__right">
                     <Switch
@@ -157,7 +166,101 @@ function InventoryView() {
   const devicesUi = useAppSelector((s) => s.context.devicesUi)
   const toast = useAppSelector((s) => s.context.toast)
 
+  const canLan = Boolean(cloud?.key)
+
   const groups = useMemo(() => groupDevicesForControl(devices, hosts as any), [devices, hosts])
+
+  const [lanState, setLanState] = useState<Record<string, LanState>>({})
+  const [lanErr, setLanErr] = useState<Record<string, string>>({})
+  const [toggleBusy, setToggleBusy] = useState<Record<string, boolean>>({})
+
+  const refreshLanState = async (uuid: string) => {
+    try {
+      const res = await apiPost<{ host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[] }>(
+        '/api/lan/state',
+        { uuid, channel: 0 },
+      )
+      setLanState((prev) => ({
+        ...prev,
+        [uuid]: { host: res.host, channel: res.channel, onoff: res.onoff, channels: res.channels, updatedAt: Date.now() },
+      }))
+      setLanErr((prev) => {
+        if (!prev[uuid]) return prev
+        const next = { ...prev }
+        delete next[uuid]
+        return next
+      })
+    } catch (e) {
+      setLanErr((prev) => ({ ...prev, [uuid]: e instanceof Error ? e.message : String(e) }))
+    }
+  }
+
+  const toggleLan = async (uuid: string, host: string, onoff: 0 | 1) => {
+    setToggleBusy((prev) => ({ ...prev, [uuid]: true }))
+
+    // Optimistic UI: reflect immediately so the card updates.
+    setLanState((prev) => ({
+      ...prev,
+      [uuid]: {
+        host: host || prev[uuid]?.host || '',
+        channel: 0,
+        onoff,
+        channels: prev[uuid]?.channels,
+        updatedAt: Date.now(),
+      },
+    }))
+
+    try {
+      await apiPost('/api/lan/toggle', { uuid, channel: 0, onoff })
+      app.send({
+        type: 'TOAST.SHOW',
+        toast: { kind: 'ok', title: onoff ? 'Switched on' : 'Switched off', detail: clampText(uuid, 12) },
+      })
+      setTimeout(() => void refreshLanState(uuid), 700)
+    } catch (e) {
+      app.send({
+        type: 'TOAST.SHOW',
+        toast: { kind: 'err', title: 'Toggle failed', detail: e instanceof Error ? e.message : String(e) },
+      })
+      // Best-effort: correct optimistic UI.
+      setTimeout(() => void refreshLanState(uuid), 700)
+    } finally {
+      setToggleBusy((prev) => ({ ...prev, [uuid]: false }))
+    }
+  }
+
+  // Once we have IPs, fetch state for a small number of likely-switch devices so cards can reflect power.
+  useEffect(() => {
+    if (!canLan) return
+
+    let alive = true
+    const run = async () => {
+      const uuids: string[] = []
+      for (const d of groups.ready ?? []) {
+        if (!alive) return
+        const uuid = String((d as any)?.uuid ?? '').trim()
+        if (!uuid) continue
+        const host = (hosts as any)?.[uuid]?.host
+        if (!host) continue
+        if (!prefersToggleFor(d as any)) continue
+        if (lanState[uuid]) continue
+        if (lanErr[uuid]) continue
+        uuids.push(uuid)
+        if (uuids.length >= 8) break
+      }
+
+      for (const uuid of uuids) {
+        if (!alive) return
+        await refreshLanState(uuid)
+        await new Promise((r) => setTimeout(r, 120))
+      }
+    }
+
+    void run()
+    return () => {
+      alive = false
+    }
+  }, [canLan, groups.ready, hosts, lanState, lanErr])
 
   const copy = async (text: string) => {
     try {
@@ -223,9 +326,7 @@ function InventoryView() {
               <div className="callout mt-4">
                 <div>
                   <div className="callout__title">Scanning LAN</div>
-                  <div className="callout__copy">
-                    Looking up IPs. Devices with a known IP remain controllable while the scan runs.
-                  </div>
+                  <div className="callout__copy">Looking up IPs. Devices with a known IP remain controllable while the scan runs.</div>
                 </div>
               </div>
             ) : null}
@@ -254,14 +355,24 @@ function InventoryView() {
                   count={groups.ready.length}
                   devices={devices}
                   hosts={hosts}
-                  uuids={new Set(groups.ready.map((d) => d.uuid))}
+                  uuids={new Set(groups.ready.map((d: any) => d.uuid))}
+                  lanState={lanState}
+                  lanErr={lanErr}
+                  toggleBusy={toggleBusy}
+                  onRefreshLanState={refreshLanState}
+                  onToggleLan={toggleLan}
                 />
                 <DeviceGroup
                   title="Inaccessible"
                   count={groups.inaccessible.length}
                   devices={devices}
                   hosts={hosts}
-                  uuids={new Set(groups.inaccessible.map((d) => d.uuid))}
+                  uuids={new Set(groups.inaccessible.map((d: any) => d.uuid))}
+                  lanState={lanState}
+                  lanErr={lanErr}
+                  toggleBusy={toggleBusy}
+                  onRefreshLanState={refreshLanState}
+                  onToggleLan={toggleLan}
                 />
               </div>
             )}
@@ -306,8 +417,13 @@ function DeviceGroup(props: {
   devices: any[]
   hosts: Record<string, any>
   uuids: Set<string>
+  lanState: Record<string, LanState>
+  lanErr: Record<string, string>
+  toggleBusy: Record<string, boolean>
+  onRefreshLanState: (uuid: string) => Promise<void>
+  onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
 }) {
-  const { title, count, devices, hosts, uuids } = props
+  const { title, count, devices, hosts, uuids, lanState, lanErr, toggleBusy, onRefreshLanState, onToggleLan } = props
   const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
 
   return (
@@ -317,15 +433,35 @@ function DeviceGroup(props: {
         <div className="chip chip--muted">{count}</div>
       </header>
       <div className="deviceList">
-        {filtered.map((d) => (
-          <DeviceRow key={String(d.uuid)} device={d} hostEntry={hosts[String(d.uuid)]} />
-        ))}
+        {filtered.map((d) => {
+          const uuid = String(d.uuid ?? '')
+          return (
+            <DeviceRow
+              key={uuid}
+              device={d}
+              hostEntry={hosts[uuid] as HostEntry}
+              lan={lanState[uuid]}
+              lanError={lanErr[uuid]}
+              isToggling={Boolean(toggleBusy[uuid])}
+              onRefreshLanState={onRefreshLanState}
+              onToggleLan={onToggleLan}
+            />
+          )
+        })}
       </div>
     </section>
   )
 }
 
-function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: string; updatedAt?: string } | undefined }) {
+function DeviceRow(props: {
+  device: any
+  hostEntry: HostEntry
+  lan: LanState | undefined
+  lanError: string | undefined
+  isToggling: boolean
+  onRefreshLanState: (uuid: string) => Promise<void>
+  onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
+}) {
   const app = useAppActorRef()
   const busy = useAppSelector((s) => s.context.busy)
 
@@ -352,22 +488,39 @@ function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: strin
   const macForResolve = macCloud || macLan || ''
 
   const ready = Boolean(host)
-  const disableToggle = busy.toggleUuid !== null
   const disableResolve = busy.resolveUuid !== null
 
+  const l = props.lan
+  const ch0 = l?.channels?.find((c) => c.channel === 0) ?? (l ? { channel: 0, onoff: l.onoff } : null)
+  const lanOn = ch0 ? ch0.onoff === 1 : null
+  const powerClass = lanOn === null ? '' : lanOn ? 'device--power-on' : 'device--power-off'
+  const lanChipTone = lanOn === null ? 'muted' : lanOn ? 'ok' : 'muted'
+
+  const togglable = ready && prefersToggleFor(d)
+  const toggleDisabled = !ready || props.isToggling
+
+  const lanDesc =
+    !ready
+      ? 'Find IP to query'
+      : props.lanError
+        ? `state error: ${props.lanError}`
+        : l
+          ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
+          : 'state unknown'
+
   return (
-    <article className="device">
+    <article className={powerClass ? `device ${powerClass}` : 'device'}>
       <header className="device__head">
         <div className="device__id">
           <div className="device__titleRow">
             <div className="device__title">{title}</div>
             <div className={`chip chip--${onlineTone}`}>{online || 'unknown'}</div>
+            <div className={`chip chip--${lanChipTone}`}>lan: {lanOn === null ? 'unknown' : lanOn ? 'on' : 'off'}</div>
           </div>
           <div className="device__subtitle">{subtitle || 'device'}</div>
           <div className="device__facts">
             <div>
-              <span className="device__factKey">ip</span>{' '}
-              <span className="device__factVal">{host ? host : '(unknown)'}</span>
+              <span className="device__factKey">ip</span> <span className="device__factVal">{host ? host : '(unknown)'}</span>
             </div>
           </div>
         </div>
@@ -388,21 +541,36 @@ function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: strin
             >
               Find IP
             </Button>
+          ) : togglable ? (
+            <>
+              <Switch
+                isSelected={lanOn === true}
+                onChange={(next) => {
+                  void props.onToggleLan(uuid, host, next ? 1 : 0)
+                }}
+                isDisabled={toggleDisabled}
+                label="Power"
+                description={undefined}
+              />
+              <Button tone="quiet" onPress={() => void props.onRefreshLanState(uuid)} isDisabled={toggleDisabled}>
+                Refresh
+              </Button>
+            </>
           ) : (
             <>
               <Button
                 tone="ghost"
-                onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid, onoff: 1 })}
-                isDisabled={disableToggle}
-                isPending={busy.toggleUuid === uuid}
+                onPress={() => void props.onToggleLan(uuid, host, 1)}
+                isDisabled={toggleDisabled}
+                isPending={props.isToggling}
               >
                 On
               </Button>
               <Button
                 tone="danger"
-                onPress={() => app.send({ type: 'DEVICES.TOGGLE', uuid, onoff: 0 })}
-                isDisabled={disableToggle}
-                isPending={busy.toggleUuid === uuid}
+                onPress={() => void props.onToggleLan(uuid, host, 0)}
+                isDisabled={toggleDisabled}
+                isPending={props.isToggling}
               >
                 Off
               </Button>
@@ -411,7 +579,15 @@ function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: strin
         </div>
       </header>
 
-      <details className="details details--device">
+      <details
+        className="details details--device"
+        onToggle={(e) => {
+          const el = e.currentTarget as HTMLDetailsElement
+          if (!el.open) return
+          if (!ready) return
+          void props.onRefreshLanState(uuid)
+        }}
+      >
         <summary className="details__summary">Details</summary>
         <div className="details__body">
           <div className="device__facts device__facts--open">
@@ -431,15 +607,21 @@ function DeviceRow(props: { device: any; hostEntry: { host?: string; mac?: strin
           </div>
 
           {ready ? (
-            <div className="actionRow mt-3">
-              <Button
-                tone="ghost"
-                onPress={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid })}
-                isDisabled={busy.diagnosticsUuid !== null || !host}
-                isPending={busy.diagnosticsUuid === uuid}
-              >
-                Fetch diagnostics
-              </Button>
+            <div className="device__open">
+              <div className="device__power">
+                <div className={`chip chip--${lanChipTone}`}>{lanDesc}</div>
+              </div>
+
+              <div className="device__actions">
+                <Button
+                  tone="ghost"
+                  onPress={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid })}
+                  isDisabled={busy.diagnosticsUuid !== null || !host}
+                  isPending={busy.diagnosticsUuid === uuid}
+                >
+                  Fetch diagnostics
+                </Button>
+              </div>
             </div>
           ) : null}
         </div>
