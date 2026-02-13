@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "postinstall": "bun run scripts/postinstall.ts",
-    "dev": "bun run --parallel --workspaces --if-present dev",
+    "dev": "concurrently --kill-others-on-fail --names core,web,cli --prefix-colors blue,green,magenta \"bun run --filter @merossity/core dev\" \"bun run --filter @merossity/web dev\" \"bun run --filter @merossity/cli dev\"",
     "build": "bun run --workspaces --if-present build",
     "lint": "bun run --workspaces --if-present lint",
     "typecheck": "bun run --workspaces --if-present typecheck",

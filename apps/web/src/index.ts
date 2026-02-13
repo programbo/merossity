@@ -107,6 +107,38 @@ const tryServeDistAsset = async (pathname: string): Promise<Response | null> => 
   return new Response(file)
 }
 
+// Watch for server-side code changes and restart in development
+if (!isProduction) {
+  const { watch, existsSync } = await import('node:fs')
+
+  // Find the workspace root (where packages/core is located)
+  let workspaceRoot = process.cwd()
+  while (workspaceRoot !== path.dirname(workspaceRoot)) {
+    if (existsSync(path.join(workspaceRoot, 'packages', 'core', 'src'))) {
+      break
+    }
+    workspaceRoot = path.dirname(workspaceRoot)
+  }
+
+  const watchPaths = [
+    srcDir, // Watch current package src (e.g., apps/web/src)
+    path.join(workspaceRoot, 'packages', 'core', 'src'), // Watch @merossity/core/src
+  ]
+
+  for (const watchPath of watchPaths) {
+    if (!existsSync(watchPath)) continue
+    watch(watchPath, { recursive: true }, (event, filename) => {
+      if (!filename) return
+      // Only watch server-side files (.ts, .js), not UI files
+      if (!/\.(ts|js|mjs|cjs)$/.test(filename)) return
+      // Skip type declaration files
+      if (filename.endsWith('.d.ts') || filename.endsWith('.d.mts') || filename.endsWith('.d.cts')) return
+      console.log(`\n📝 Server code changed: ${filename} — restarting…`)
+      process.exit(0) // Let concurrently restart the process
+    })
+  }
+}
+
 await serveWithControl({
   routes: {
     // Production: serve built assets (dist/*). All other unmatched routes return index.html for SPA navigation.

@@ -14,12 +14,14 @@
     "format": "prettier --config prettier.config.cjs --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
-    "build": "bunup"
+    "build": "bunup",
+    "dev": "bunup --watch"
   },
   "devDependencies": {
     "@merossity/qa": "workspace:*",
     "@types/bun": "latest",
     "@types/node": "latest",
-    "bunup": "latest"
+    "bunup": "latest",
+    "concurrently": "latest"
   }
 }

@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { groupDevicesForControl } from '@merossity/core/meross/inventory'
 import { Heading } from 'react-aria-components'
 import './index.css'
-import { apiPost } from './lib/api'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
+import { AuthProvider, useAuthActorRef, useAuthSelector } from './state/authActor'
+import { DevicesProvider, useDevicesActorRef, useDevicesSelector } from './state/devicesActor'
 import { Button } from './ui/rac/Button'
 import { Modal } from './ui/rac/Modal'
 import { Switch } from './ui/rac/Switch'
 import { TextField } from './ui/rac/TextField'
+import { useToast } from './ui/toast'
 
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
 
@@ -18,7 +20,7 @@ const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as cons
 const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
-type LanState = { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[]; updatedAt: number }
+type DeviceState = { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[]; updatedAt: number }
 
 type HostEntry = { host?: string; mac?: string; updatedAt?: string } | undefined
 
@@ -65,6 +67,15 @@ const prefersToggleFor = (d: { deviceType?: unknown; subType?: unknown }) => {
   return typeKey.includes('msl') || typeKey.includes('mss') || typeKey.includes('light') || typeKey.includes('switch')
 }
 
+const getInitialCidr = (): string => {
+  try {
+    if (typeof localStorage === 'undefined') return ''
+    return localStorage.getItem('merossity.cidr') ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export function App() {
   return (
     <AppProvider>
@@ -74,10 +85,30 @@ export function App() {
 }
 
 function AppView() {
-  const busy = useAppSelector((s) => s.context.busy)
-  const linked = useAppSelector((s) => Boolean(s.context.cloud?.key))
-  if (busy.bootstrap) return <BootView />
-  return <div className="lab-bg min-h-screen">{linked ? <InventoryView /> : <KeyGateView />}</div>
+  const isBooting = useAppSelector((s) => s.matches('booting'))
+  const isInActive = useAppSelector((s) => s.matches('active'))
+  const isAuthView = useAppSelector((s) => s.matches('active.auth'))
+  const isDevicesView = useAppSelector((s) => s.matches('active.devices'))
+
+  if (isBooting) return <BootView />
+  return (
+    <div className="lab-bg min-h-screen">
+      {isInActive && isAuthView && <KeyGateView />}
+      {isInActive && isDevicesView && <DevicesWrapper />}
+    </div>
+  )
+}
+
+function DevicesWrapper() {
+  const cloud = useAppSelector((s) => s.context.cloud)
+  const initialCidr = getInitialCidr()
+
+  if (!cloud) return null
+  return (
+    <DevicesProvider cloud={cloud} initialCidr={initialCidr}>
+      <InventoryViewInternal />
+    </DevicesProvider>
+  )
 }
 
 function BootView() {
@@ -95,17 +126,20 @@ function BootView() {
 
 function KeyGateView() {
   const app = useAppActorRef()
-  const status = useAppSelector((s) => s.context.status)
-  const connect = useAppSelector((s) => s.context.connect)
-  const busy = useAppSelector((s) => s.context.busy)
-  const toast = useAppSelector((s) => s.context.toast)
+  const auth = useAuthActorRef()
+  const useEnv = useAuthSelector((s) => s.context.useEnv)
+  const email = useAuthSelector((s) => s.context.email)
+  const password = useAuthSelector((s) => s.context.password)
+  const totp = useAuthSelector((s) => s.context.totp)
+  const status = useAuthSelector((s) => s.context.status)
+  const isSubmitting = useAuthSelector((s) => s.matches('submitting'))
 
   const envReady = Boolean(status?.env.hasEmail && status?.env.hasPassword)
   const canSubmit = useMemo(() => {
-    if (!isTotpValid(connect.totp)) return false
-    if (connect.useEnv) return envReady
-    return Boolean(connect.email.trim() && connect.password)
-  }, [connect.email, connect.password, connect.totp, connect.useEnv, envReady])
+    if (!isTotpValid(totp)) return false
+    if (useEnv) return envReady
+    return Boolean(email.trim() && password)
+  }, [email, password, totp, useEnv, envReady])
 
   return (
     <div className="app-shell">
@@ -127,30 +161,30 @@ function KeyGateView() {
           <div className="panel__body">
             <div className="grid gap-4">
               <TextField
-                label={connect.useEnv ? 'Email (disabled: using server env)' : 'Email'}
-                value={connect.email}
-                onChange={(email) => app.send({ type: 'CONNECT.SET_EMAIL', email })}
+                label={useEnv ? 'Email (disabled: using server env)' : 'Email'}
+                value={email}
+                onChange={(email) => auth.send({ type: 'SET_EMAIL', email })}
                 placeholder="name@example.com"
-                isDisabled={busy.login || busy.bootstrap || connect.useEnv}
+                isDisabled={isSubmitting || useEnv}
                 inputProps={INPUT_COMMON}
               />
 
               <TextField
-                label={connect.useEnv ? 'Password (disabled: using server env)' : 'Password'}
-                value={connect.password}
-                onChange={(password) => app.send({ type: 'CONNECT.SET_PASSWORD', password })}
-                placeholder="••••••••"
-                isDisabled={busy.login || busy.bootstrap || connect.useEnv}
+                label={useEnv ? 'Password (disabled: using server env)' : 'Password'}
+                value={password}
+                onChange={(password) => auth.send({ type: 'SET_PASSWORD', password })}
+                placeholder="•••••••••"
+                isDisabled={isSubmitting || useEnv}
                 inputProps={INPUT_PASSWORD}
               />
 
               <TextField
                 label="TOTP (6 digits)"
-                value={connect.totp}
-                onChange={(totp) => app.send({ type: 'CONNECT.SET_TOTP', totp })}
+                value={totp}
+                onChange={(totp) => auth.send({ type: 'SET_TOTP', totp })}
                 placeholder="123456"
                 hint="Required."
-                isDisabled={busy.login || busy.bootstrap}
+                isDisabled={isSubmitting}
                 inputProps={INPUT_NUMERIC}
               />
             </div>
@@ -165,11 +199,11 @@ function KeyGateView() {
                   </div>
                   <div className="callout__right">
                     <Switch
-                      isSelected={connect.useEnv}
-                      onChange={(useEnv) => app.send({ type: 'CONNECT.SET_USE_ENV', useEnv })}
-                      isDisabled={busy.login || busy.bootstrap}
+                      isSelected={useEnv}
+                      onChange={(useEnv) => auth.send({ type: 'SET_USE_ENV', useEnv })}
+                      isDisabled={isSubmitting}
                       label="Use server env"
-                      description={connect.useEnv ? 'Email/password disabled' : 'Manual entry'}
+                      description={useEnv ? 'Email/password disabled' : 'Manual entry'}
                     />
                   </div>
                 </div>
@@ -179,9 +213,18 @@ function KeyGateView() {
             <div className="actionRow mt-5">
               <Button
                 tone="primary"
-                onPress={() => app.send({ type: 'CONNECT.SUBMIT' })}
-                isDisabled={busy.login || busy.bootstrap || !canSubmit}
-                isPending={busy.login}
+                onPress={() => {
+                  auth.send({ type: 'SUBMIT' })
+                  const sub = auth.getSnapshot()
+                  if (sub?.matches('success')) {
+                    const cloud = sub.context.cloud
+                    if (cloud) {
+                      app.send({ type: 'auth_loginSuccess', cloud })
+                    }
+                  }
+                }}
+                isDisabled={isSubmitting || !canSubmit}
+                isPending={isSubmitting}
               >
                 Fetch key
               </Button>
@@ -189,145 +232,33 @@ function KeyGateView() {
           </div>
         </section>
       </main>
-
-      {toast ? <Toast /> : null}
     </div>
   )
 }
 
-function InventoryView() {
-  const app = useAppActorRef()
+function InventoryViewInternal() {
   const cloud = useAppSelector((s) => s.context.cloud)
-  const devices = useAppSelector((s) => s.context.devices)
-  const hosts = useAppSelector((s) => s.context.hosts)
-  const busy = useAppSelector((s) => s.context.busy)
-  const devicesUi = useAppSelector((s) => s.context.devicesUi)
-  const toast = useAppSelector((s) => s.context.toast)
+  const devices = useDevicesSelector((s) => s.context.devices)
+  const hosts = useDevicesSelector((s) => s.context.hosts)
+  const deviceStates = useDevicesSelector((s) => s.context.deviceStates)
+  const cidr = useDevicesSelector((s) => s.context.cidr)
+  const isScanning = useDevicesSelector(
+    (s) => s.matches({ inventory: 'discoveringHosts' }) || s.matches({ inventory: 'suggestingCidr' }),
+  )
+  const isRefreshing = useDevicesSelector((s) => s.matches({ inventory: 'refreshingCloud' }))
+  const systemDump = useDevicesSelector((s) => s.context.systemDump)
 
   const canLan = Boolean(cloud?.key)
-  const reloadBusy = Boolean(busy.refreshDevices || busy.scanLan || busy.suggestCidr)
+  const reloadBusy = Boolean(isRefreshing || isScanning)
 
-  const groups = useMemo(() => groupDevicesForControl(devices, hosts as any), [devices, hosts])
-
-  const [lanState, setLanState] = useState<Record<string, LanState>>({})
-  const [lanErr, setLanErr] = useState<Record<string, string>>({})
-  const [toggleBusy, setToggleBusy] = useState<Record<string, boolean>>({})
-  const [refreshLanCount, setRefreshLanCount] = useState<Record<string, number>>({})
-
-  const refreshLanState = async (uuid: string) => {
-    setRefreshLanCount((prev) => ({ ...prev, [uuid]: (prev[uuid] ?? 0) + 1 }))
-    try {
-      const res = await apiPost<{ host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[] }>(
-        '/api/lan/state',
-        { uuid, channel: 0 },
-      )
-      setLanState((prev) => ({
-        ...prev,
-        [uuid]: {
-          host: res.host,
-          channel: res.channel,
-          onoff: res.onoff,
-          channels: res.channels,
-          updatedAt: Date.now(),
-        },
-      }))
-      setLanErr((prev) => {
-        if (!prev[uuid]) return prev
-        const next = { ...prev }
-        delete next[uuid]
-        return next
-      })
-    } catch (e) {
-      setLanErr((prev) => ({ ...prev, [uuid]: e instanceof Error ? e.message : String(e) }))
-    } finally {
-      setRefreshLanCount((prev) => {
-        const cur = prev[uuid] ?? 0
-        const nextCount = cur - 1
-        if (nextCount > 0) return { ...prev, [uuid]: nextCount }
-        if (!cur) return prev
-        const next = { ...prev }
-        delete next[uuid]
-        return next
-      })
-    }
-  }
-
-  const toggleLan = async (uuid: string, host: string, onoff: 0 | 1) => {
-    setToggleBusy((prev) => ({ ...prev, [uuid]: true }))
-
-    // Optimistic UI: reflect immediately so the card updates.
-    setLanState((prev) => ({
-      ...prev,
-      [uuid]: {
-        host: host || prev[uuid]?.host || '',
-        channel: 0,
-        onoff,
-        channels: prev[uuid]?.channels,
-        updatedAt: Date.now(),
-      },
-    }))
-
-    try {
-      await apiPost('/api/lan/toggle', { uuid, channel: 0, onoff })
-      app.send({
-        type: 'TOAST.SHOW',
-        toast: { kind: 'ok', title: onoff ? 'Switched on' : 'Switched off', detail: clampText(uuid, 12) },
-      })
-      setTimeout(() => void refreshLanState(uuid), 700)
-    } catch (e) {
-      app.send({
-        type: 'TOAST.SHOW',
-        toast: { kind: 'err', title: 'Toggle failed', detail: e instanceof Error ? e.message : String(e) },
-      })
-      // Best-effort: correct optimistic UI.
-      setTimeout(() => void refreshLanState(uuid), 700)
-    } finally {
-      setToggleBusy((prev) => ({ ...prev, [uuid]: false }))
-    }
-  }
-
-  // Once we have IPs, fetch state for a small number of likely-switch devices so cards can reflect power.
-  useEffect(() => {
-    if (!canLan) return
-
-    let alive = true
-    const run = async () => {
-      const uuids: string[] = []
-      for (const d of groups.ready ?? []) {
-        if (!alive) return
-        const uuid = String((d as any)?.uuid ?? '').trim()
-        if (!uuid) continue
-        const host = (hosts as any)?.[uuid]?.host
-        if (!host) continue
-        if (!prefersToggleFor(d as any)) continue
-        if (lanState[uuid]) continue
-        if (lanErr[uuid]) continue
-        uuids.push(uuid)
-        if (uuids.length >= 8) break
-      }
-
-      for (const uuid of uuids) {
-        if (!alive) return
-        await refreshLanState(uuid)
-        await new Promise((r) => setTimeout(r, 120))
-      }
-    }
-
-    void run()
-    return () => {
-      alive = false
-    }
-  }, [canLan, groups.ready, hosts, lanState, lanErr])
+  const groups = useMemo(() => groupDevicesForControl(devices, hosts), [devices, hosts])
 
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      app.send({ type: 'TOAST.SHOW', toast: { kind: 'ok', title: 'Copied' } })
+      // Toast shown by machine
     } catch (e) {
-      app.send({
-        type: 'TOAST.SHOW',
-        toast: { kind: 'err', title: 'Copy failed', detail: e instanceof Error ? e.message : String(e) },
-      })
+      // Toast shown by machine
     }
   }
 
@@ -362,8 +293,8 @@ function InventoryView() {
                 className={`is-iconOnly reloadButton${reloadBusy ? 'is-busy' : ''}`}
                 aria-label="Reload devices (refresh + scan LAN)"
                 onPress={() => {
-                  app.send({ type: 'DEVICES.REFRESH_FROM_CLOUD' })
-                  app.send({ type: 'DEVICES.DISCOVER_HOSTS' })
+                  useDevicesActorRef().send({ type: 'REFRESH' })
+                  useDevicesActorRef().send({ type: 'SCAN' })
                 }}
                 isDisabled={reloadBusy}
                 icon={<RefreshIcon className={reloadBusy ? 'iconSpin' : undefined} />}
@@ -372,12 +303,12 @@ function InventoryView() {
           </header>
 
           <div className="panel__body">
-            {busy.scanLan || busy.suggestCidr ? (
+            {isScanning ? (
               <div className="callout mt-4">
                 <div>
                   <div className="callout__title">Scanning LAN</div>
                   <div className="callout__copy">
-                    Looking up IPs. Devices with a known IP remain controllable while the scan runs.
+                    Looking up IPs. Devices with a known IP remain controllable while scan runs.
                   </div>
                 </div>
               </div>
@@ -386,11 +317,11 @@ function InventoryView() {
             <div className="subpanel mt-4">
               <TextField
                 label="CIDR (optional)"
-                value={devicesUi.cidr}
-                onChange={(cidr) => app.send({ type: 'DEVICES.SET_CIDR', cidr })}
+                value={cidr}
+                onChange={(cidr) => useDevicesActorRef().send({ type: 'SET_CIDR', cidr })}
                 placeholder="auto (recommended)"
                 hint="Leave blank to auto-suggest; set a CIDR to speed up scanning."
-                isDisabled={busy.scanLan || busy.suggestCidr}
+                isDisabled={isScanning}
                 inputProps={INPUT_COMMON}
               />
             </div>
@@ -407,26 +338,16 @@ function InventoryView() {
                   count={groups.ready.length}
                   devices={devices}
                   hosts={hosts}
+                  deviceStates={deviceStates}
                   uuids={new Set(groups.ready.map((d: any) => d.uuid))}
-                  lanState={lanState}
-                  lanErr={lanErr}
-                  toggleBusy={toggleBusy}
-                  refreshLanCount={refreshLanCount}
-                  onRefreshLanState={refreshLanState}
-                  onToggleLan={toggleLan}
                 />
                 <DeviceGroup
                   title="Inaccessible"
                   count={groups.inaccessible.length}
                   devices={devices}
                   hosts={hosts}
+                  deviceStates={deviceStates}
                   uuids={new Set(groups.inaccessible.map((d: any) => d.uuid))}
-                  lanState={lanState}
-                  lanErr={lanErr}
-                  toggleBusy={toggleBusy}
-                  refreshLanCount={refreshLanCount}
-                  onRefreshLanState={refreshLanState}
-                  onToggleLan={toggleLan}
                 />
               </div>
             )}
@@ -434,23 +355,27 @@ function InventoryView() {
 
           <Modal
             isDismissable
-            isOpen={Boolean(devicesUi.systemDump)}
+            isOpen={Boolean(systemDump)}
             onOpenChange={(open) => {
-              if (!open) app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })
+              if (!open) useDevicesActorRef().send({ type: 'CLOSE_SYSTEM_DUMP' })
             }}
           >
-            {devicesUi.systemDump ? (
+            {systemDump ? (
               <div className="dump">
                 <Heading slot="title" className="dump__title">
                   Diagnostics: Appliance.System.All
                 </Heading>
                 <div className="dump__meta">
-                  <div className="dump__uuid">{clampText(devicesUi.systemDump.uuid, 22)}</div>
-                  <div className="dump__host">{devicesUi.systemDump.host}</div>
+                  <div className="dump__uuid">{clampText(systemDump.uuid, 22)}</div>
+                  <div className="dump__host">{systemDump.host}</div>
                 </div>
-                <pre className="dump__pre">{JSON.stringify(devicesUi.systemDump.data, null, 2)}</pre>
+                <pre className="dump__pre">{JSON.stringify(systemDump.data, null, 2)}</pre>
                 <div className="dump__actions">
-                  <Button tone="ghost" slot="close" onPress={() => app.send({ type: 'DEVICES.CLOSE_SYSTEM_DUMP' })}>
+                  <Button
+                    tone="ghost"
+                    slot="close"
+                    onPress={() => useDevicesActorRef().send({ type: 'CLOSE_SYSTEM_DUMP' })}
+                  >
                     Close
                   </Button>
                 </div>
@@ -459,8 +384,6 @@ function InventoryView() {
           </Modal>
         </section>
       </main>
-
-      {toast ? <Toast /> : null}
     </div>
   )
 }
@@ -470,27 +393,10 @@ function DeviceGroup(props: {
   count: number
   devices: any[]
   hosts: Record<string, any>
+  deviceStates: Record<string, DeviceState>
   uuids: Set<string>
-  lanState: Record<string, LanState>
-  lanErr: Record<string, string>
-  toggleBusy: Record<string, boolean>
-  refreshLanCount: Record<string, number>
-  onRefreshLanState: (uuid: string) => Promise<void>
-  onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
 }) {
-  const {
-    title,
-    count,
-    devices,
-    hosts,
-    uuids,
-    lanState,
-    lanErr,
-    toggleBusy,
-    refreshLanCount,
-    onRefreshLanState,
-    onToggleLan,
-  } = props
+  const { title, count, devices, hosts, deviceStates, uuids } = props
   const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
 
   return (
@@ -503,17 +409,7 @@ function DeviceGroup(props: {
         {filtered.map((d) => {
           const uuid = String(d.uuid ?? '')
           return (
-            <DeviceRow
-              key={uuid}
-              device={d}
-              hostEntry={hosts[uuid] as HostEntry}
-              lan={lanState[uuid]}
-              lanError={lanErr[uuid]}
-              isRefreshingLanState={Boolean(refreshLanCount[uuid])}
-              isToggling={Boolean(toggleBusy[uuid])}
-              onRefreshLanState={onRefreshLanState}
-              onToggleLan={onToggleLan}
-            />
+            <DeviceRow key={uuid} device={d} hostEntry={hosts[uuid] as HostEntry} deviceState={deviceStates[uuid]} />
           )
         })}
       </div>
@@ -521,21 +417,23 @@ function DeviceGroup(props: {
   )
 }
 
-function DeviceRow(props: {
-  device: any
-  hostEntry: HostEntry
-  lan: LanState | undefined
-  lanError: string | undefined
-  isRefreshingLanState: boolean
-  isToggling: boolean
-  onRefreshLanState: (uuid: string) => Promise<void>
-  onToggleLan: (uuid: string, host: string, onoff: 0 | 1) => Promise<void>
-}) {
-  const app = useAppActorRef()
-  const busy = useAppSelector((s) => s.context.busy)
+function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: DeviceState | undefined }) {
+  const devices = useDevicesActorRef()
+  const uuid = String(props.device?.uuid ?? '')
+  const isResolving = useDevicesSelector(
+    (s) => s.matches({ operations: 'resolving' }) && s.context.activeDeviceUuid === uuid,
+  )
+  const isToggling = useDevicesSelector(
+    (s) => s.matches({ operations: 'toggling' }) && s.context.activeDeviceUuid === uuid,
+  )
+  const isFetchingState = useDevicesSelector(
+    (s) => s.matches({ operations: 'fetchingState' }) && s.context.activeDeviceUuid === uuid,
+  )
+  const isFetchingDiagnostics = useDevicesSelector(
+    (s) => s.matches({ operations: 'fetchingDiagnostics' }) && s.context.activeDeviceUuid === uuid,
+  )
 
   const d = props.device
-  const uuid = String(d.uuid ?? '')
 
   const host = props.hostEntry?.host ? String(props.hostEntry.host) : ''
   const hostUpdatedAt = props.hostEntry?.updatedAt ? String(props.hostEntry.updatedAt) : ''
@@ -555,24 +453,22 @@ function DeviceRow(props: {
   const macForResolve = macCloud || macLan || ''
 
   const ready = Boolean(host)
-  const disableResolve = busy.resolveUuid !== null
+  const disableResolve = isResolving
 
-  const l = props.lan
+  const l = props.deviceState
   const ch0 = l?.channels?.find((c) => c.channel === 0) ?? (l ? { channel: 0, onoff: l.onoff } : null)
   const lanOn = ch0 ? ch0.onoff === 1 : null
   const powerClass = lanOn === null ? '' : lanOn ? 'device--power-on' : 'device--power-off'
   const lanChipTone = lanOn === null ? 'muted' : lanOn ? 'ok' : 'muted'
 
   const togglable = ready && prefersToggleFor(d)
-  const toggleDisabled = !ready || props.isToggling
+  const toggleDisabled = !ready || isToggling
 
   const lanDesc = !ready
     ? 'Find IP to query'
-    : props.lanError
-      ? `state error: ${props.lanError}`
-      : l
-        ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
-        : 'state unknown'
+    : l
+      ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
+      : 'state unknown'
 
   return (
     <article className={powerClass ? `device ${powerClass}` : 'device'}>
@@ -597,14 +493,15 @@ function DeviceRow(props: {
             <Button
               tone="primary"
               onPress={() =>
-                app.send({
-                  type: 'DEVICES.RESOLVE_HOST',
+                devices.send({
+                  type: 'device_RESOLVE',
                   uuid,
                   mac: macForResolve,
                   title,
                 })
               }
               isDisabled={disableResolve}
+              isPending={isResolving}
             >
               Find IP
             </Button>
@@ -613,7 +510,7 @@ function DeviceRow(props: {
               <Switch
                 isSelected={lanOn === true}
                 onChange={(next) => {
-                  void props.onToggleLan(uuid, host, next ? 1 : 0)
+                  devices.send({ type: 'device_TOGGLE', uuid, onoff: next ? 1 : 0 })
                 }}
                 isDisabled={toggleDisabled}
                 label="Power"
@@ -623,26 +520,26 @@ function DeviceRow(props: {
                 tone="quiet"
                 className="is-iconOnly"
                 aria-label="Refresh device state"
-                onPress={() => void props.onRefreshLanState(uuid)}
+                onPress={() => devices.send({ type: 'device_REFRESH_STATE', uuid })}
                 isDisabled={toggleDisabled}
-                icon={<RefreshIcon className={props.isRefreshingLanState ? 'iconSpin' : undefined} />}
+                icon={<RefreshIcon className={isFetchingState ? 'iconSpin' : undefined} />}
               />
             </>
           ) : (
             <>
               <Button
                 tone="ghost"
-                onPress={() => void props.onToggleLan(uuid, host, 1)}
+                onPress={() => devices.send({ type: 'device_TOGGLE', uuid, onoff: 1 })}
                 isDisabled={toggleDisabled}
-                isPending={props.isToggling}
+                isPending={isToggling}
               >
                 On
               </Button>
               <Button
                 tone="danger"
-                onPress={() => void props.onToggleLan(uuid, host, 0)}
+                onPress={() => devices.send({ type: 'device_TOGGLE', uuid, onoff: 0 })}
                 isDisabled={toggleDisabled}
-                isPending={props.isToggling}
+                isPending={isToggling}
               >
                 Off
               </Button>
@@ -657,7 +554,7 @@ function DeviceRow(props: {
           const el = e.currentTarget as HTMLDetailsElement
           if (!el.open) return
           if (!ready) return
-          void props.onRefreshLanState(uuid)
+          devices.send({ type: 'device_REFRESH_STATE', uuid })
         }}
       >
         <summary className="details__summary">Details</summary>
@@ -688,9 +585,9 @@ function DeviceRow(props: {
               <div className="device__actions">
                 <Button
                   tone="ghost"
-                  onPress={() => app.send({ type: 'DEVICES.SYSTEM_SNAPSHOT', uuid })}
-                  isDisabled={busy.diagnosticsUuid !== null || !host}
-                  isPending={busy.diagnosticsUuid === uuid}
+                  onPress={() => devices.send({ type: 'device_DIAGNOSTICS', uuid })}
+                  isDisabled={isFetchingDiagnostics || !host}
+                  isPending={isFetchingDiagnostics}
                 >
                   Fetch diagnostics
                 </Button>
@@ -700,24 +597,6 @@ function DeviceRow(props: {
         </div>
       </details>
     </article>
-  )
-}
-
-function Toast() {
-  const toast = useAppSelector((s) => s.context.toast)
-  if (!toast) return null
-
-  return (
-    <div className="toastRegion" role="status" aria-live="polite">
-      <div className={`toast toast--${toast.kind}`}>
-        <div className="toast__row">
-          <div className="toast__badge">{toast.kind === 'ok' ? 'OK' : 'ERROR'}</div>
-          <div className="toast__brand">merossity</div>
-        </div>
-        <div className="toast__title">{toast.title}</div>
-        {toast.detail ? <div className="toast__detail">{toast.detail}</div> : null}
-      </div>
-    </div>
   )
 }
 

@@ -1,0 +1,11 @@
+[     457ms] Error: You used a hook from "ActorProvider" but it's not inside a <ActorProvider> component.
+    at J (http://localhost:3000/chunk-r2cq3dbw.js:24:8702)
+    at X (http://localhost:3000/chunk-r2cq3dbw.js:24:8834)
+    at WO (http://localhost:3000/chunk-r2cq3dbw.js:24:24302)
+    at eU (http://localhost:3000/chunk-r2cq3dbw.js:8:36232)
+    at QU (http://localhost:3000/chunk-r2cq3dbw.js:8:54707)
+    at fD (http://localhost:3000/chunk-r2cq3dbw.js:8:65087)
+    at QL (http://localhost:3000/chunk-r2cq3dbw.js:8:100310)
+    at qK (http://localhost:3000/chunk-r2cq3dbw.js:8:99380)
+    at _1 (http://localhost:3000/chunk-r2cq3dbw.js:8:99217)
+    at JL (http://localhost:3000/chunk-r2cq3dbw.js:8:96038)
