@@ -1,14 +1,11 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { applySecurityHeaders, createApiRoutes } from '@merossity/core/api'
-import { loadEnvFromRootIfPresent } from '@merossity/core/lib'
 import tailwindPlugin from 'bun-plugin-tailwind'
 import { htmlContent } from 'node_modules/@merossity/core/src/api/shared'
 import { serveWithControl } from './dev/serve-with-control'
 
 const isProduction = process.env.NODE_ENV === 'production'
-
-await loadEnvFromRootIfPresent()
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.resolve(srcDir, '..', 'dist')

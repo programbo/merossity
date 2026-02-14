@@ -2,6 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   MerossDumpParseError,
+  MerossCloudError,
   defaultMerossConfigPath,
   defaultSuggestedCidr,
   extractLanMac,
@@ -96,6 +97,145 @@ const resolveHost = async (args: {
 
 export const merossCommands = () => {
   return [
+    defineCommand(
+      {
+        name: 'meross:auth-debug',
+        description:
+          'Debug Meross cloud login across regions. Prints per-domain results; does not persist config unless --write-config is set.',
+        flags: {
+          email: { type: String, description: 'Meross cloud email', required: true },
+          password: { type: String, description: 'Meross cloud password', required: true },
+          mfaToken: { type: String, description: 'MFA token (TOTP 6 digits)', required: true },
+          domain: { type: String, description: 'Force a specific cloud domain (e.g. iotx-us.meross.com)' },
+          scheme: { type: String, description: 'Scheme ("https" or "http")', default: 'https' },
+          timeoutMs: { type: Number, description: 'HTTP timeout ms (default: 15000)', default: 15000 },
+          verbose: { type: Boolean, description: 'Enable verbose auth logging (MEROSS_DEBUG_AUTH=2)', negatable: false },
+          tryAll: { type: Boolean, description: 'Try all candidate regions even after a success', negatable: false },
+          writeConfig: {
+            type: Boolean,
+            description: 'Persist successful cloud creds to ~/.config/merossity/config.json',
+            negatable: false,
+          },
+        },
+      },
+      async ({ flags }) => {
+        const mfa = String(flags.mfaToken ?? '').trim()
+        if (!/^[0-9]{6}$/.test(mfa)) {
+          throw new Error('Invalid "--mfaToken". Expected 6 digits.')
+        }
+
+        if (flags.scheme !== 'https' && flags.scheme !== 'http') {
+          throw new Error('Invalid "--scheme". Expected "https" or "http".')
+        }
+
+        if (flags.verbose) process.env.MEROSS_DEBUG_AUTH = '2'
+
+        const email = String(flags.email).trim()
+        const password = String(flags.password)
+
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+        const guessRegion = (): 'us' | 'eu' | 'ap' | 'global' => {
+          if (tz.startsWith('America/')) return 'us'
+          if (tz.startsWith('Europe/')) return 'eu'
+          if (tz.startsWith('Asia/') || tz.startsWith('Australia/') || tz.startsWith('Pacific/')) return 'ap'
+          return 'global'
+        }
+
+        const REGION_DOMAINS: Record<string, string> = {
+          global: 'iotx.meross.com',
+          us: 'iotx-us.meross.com',
+          eu: 'iotx-eu.meross.com',
+          ap: 'iotx-ap.meross.com',
+        }
+
+        const domainCandidates: string[] = (() => {
+          if (flags.domain) return [String(flags.domain)]
+          const guessed = guessRegion()
+          const ordered = [guessed, 'us', 'eu', 'ap', 'global']
+          const domains = ordered
+            .map((k) => REGION_DOMAINS[k])
+            .filter((v): v is string => typeof v === 'string' && v.length > 0)
+          return Array.from(new Set(domains))
+        })()
+
+        const results: Array<{
+          domain: string
+          ok: boolean
+          elapsedMs: number
+          apiStatus?: number
+          info?: string
+          error?: string
+          userEmail?: string
+          userId?: string
+          keyPreview?: string
+        }> = []
+
+        let success: MerossCloudCredentials | null = null
+
+        for (const domain of domainCandidates) {
+          const startedAt = Date.now()
+          try {
+            const res = await merossCloudLogin(
+              { email, password, mfaCode: mfa },
+              {
+                domain,
+                scheme: flags.scheme as 'https' | 'http',
+                timeoutMs: Number.isFinite(flags.timeoutMs) ? Number(flags.timeoutMs) : undefined,
+              },
+            )
+            success = res.creds
+            const keyPreview = res.creds.key ? `${res.creds.key.slice(0, 4)}…${res.creds.key.slice(-4)}` : ''
+            results.push({
+              domain,
+              ok: true,
+              elapsedMs: Date.now() - startedAt,
+              userEmail: res.creds.userEmail,
+              userId: res.creds.userId,
+              keyPreview,
+            })
+            if (!flags.tryAll) break
+          } catch (e) {
+            const err = e instanceof Error ? e.message : String(e)
+            results.push({
+              domain,
+              ok: false,
+              elapsedMs: Date.now() - startedAt,
+              ...(e instanceof MerossCloudError ? { apiStatus: e.apiStatus, info: e.info } : {}),
+              error: err,
+            })
+          }
+        }
+
+        if (success && flags.writeConfig) {
+          const cfg = await readConfig()
+          await writeConfig({ ...cfg, cloud: { ...success, updatedAt: nowIso() } })
+        }
+
+        console.log(
+          JSON.stringify(
+            {
+              timezone: tz,
+              candidates: domainCandidates,
+              results,
+              success: success
+                ? {
+                    userEmail: success.userEmail,
+                    domain: success.domain,
+                    keyPreview: `${success.key.slice(0, 4)}…${success.key.slice(-4)}`,
+                  }
+                : null,
+            },
+            null,
+            2,
+          ),
+        )
+
+        if (!success) {
+          process.exitCode = 1
+        }
+      },
+    ),
+
     defineCommand(
       {
         name: 'meross:login',

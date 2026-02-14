@@ -26,7 +26,7 @@ export const createRefreshCloudDevicesHandler = () => ({
       if (e instanceof MerossCloudError) {
         return apiErr(e.message, 'cloud_error', { apiStatus: e.apiStatus, info: e.info })
       }
-      return (apiErr(e instanceof Error ? e.message : String(e), 'unknown'), { status: 500 } as Response)
+      return apiErr(e instanceof Error ? e.message : String(e), 'unknown', undefined, { status: 500 })
     }
   },
 })

@@ -4,6 +4,7 @@ import { Heading } from 'react-aria-components'
 import './index.css'
 import { AppProvider, useAppActorRef, useAppSelector } from './state/appActor'
 import { AuthProvider, useAuthActorRef, useAuthSelector } from './state/authActor'
+import type { LoginRegion } from './state/authMachine'
 import { DevicesProvider, useDevicesActorRef, useDevicesSelector } from './state/devicesActor'
 import { Button } from './ui/rac/Button'
 import { Modal } from './ui/rac/Modal'
@@ -13,10 +14,67 @@ import { TextField } from './ui/rac/TextField'
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
 
 const INPUT_COMMON = { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const
+const INPUT_EMAIL = { ...INPUT_COMMON, type: 'email' as const, autoComplete: 'email' } as const
 const INPUT_PASSWORD = { ...INPUT_COMMON, type: 'password' as const } as const
 const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as const
 
 const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
+const LOGIN_REGION_STORAGE_KEY = 'merossity.loginRegion'
+
+const isLoginRegion = (v: string): v is LoginRegion => v === 'auto' || v === 'global' || v === 'us' || v === 'eu' || v === 'ap'
+
+const getLikelyLoginRegion = (): { region: Exclude<LoginRegion, 'auto'>; reason: string } => {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  const languages = [...(navigator.languages ?? []), navigator.language].filter(Boolean).join(', ')
+
+  if (timezone.startsWith('America/')) {
+    return { region: 'us', reason: `timezone: ${timezone}` }
+  }
+
+  if (timezone.startsWith('Europe/')) {
+    return { region: 'eu', reason: `timezone: ${timezone}` }
+  }
+
+  if (timezone.startsWith('Asia/') || timezone.startsWith('Australia/') || timezone.startsWith('Pacific/')) {
+    return { region: 'ap', reason: `timezone: ${timezone}` }
+  }
+
+  const usLocale = /-(US|CA|MX)\b/i.test(languages)
+  if (usLocale) {
+    return { region: 'us', reason: `language: ${languages}` }
+  }
+
+  const euLocale = /-(GB|IE|FR|DE|ES|IT|NL|BE|SE|NO|DK|FI|PL|PT|AT|CH)\b/i.test(languages)
+  if (euLocale) {
+    return { region: 'eu', reason: `language: ${languages}` }
+  }
+
+  const apLocale = /-(AU|NZ|JP|KR|SG|HK|TW)\b/i.test(languages)
+  if (apLocale) {
+    return { region: 'ap', reason: `language: ${languages}` }
+  }
+
+  return { region: 'global', reason: timezone ? `timezone: ${timezone}` : 'default' }
+}
+
+const getStoredLoginRegion = (): LoginRegion | null => {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    const raw = localStorage.getItem(LOGIN_REGION_STORAGE_KEY) ?? ''
+    return isLoginRegion(raw) ? raw : null
+  } catch {
+    return null
+  }
+}
+
+const persistLoginRegion = (region: LoginRegion): void => {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(LOGIN_REGION_STORAGE_KEY, region)
+  } catch {
+    // ignore
+  }
+}
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
 type DeviceState = {
@@ -76,12 +134,8 @@ const prefersToggleFor = (d: { deviceType?: unknown; subType?: unknown }) => {
 }
 
 const getInitialCidr = (): string => {
-  try {
-    if (typeof localStorage === 'undefined') return ''
-    return localStorage.getItem('merossity.cidr') ?? ''
-  } catch {
-    return ''
-  }
+  // CIDR selection is intentionally not exposed in the main UI (auto-suggest only).
+  return ''
 }
 
 export function App() {
@@ -142,25 +196,48 @@ function BootView() {
 function KeyGateView() {
   const app = useAppActorRef()
   const auth = useAuthActorRef()
-  const useEnv = useAuthSelector((s) => s.context.useEnv)
   const email = useAuthSelector((s) => s.context.email)
   const password = useAuthSelector((s) => s.context.password)
   const totp = useAuthSelector((s) => s.context.totp)
-  const status = useAuthSelector((s) => s.context.status)
+  const region = useAuthSelector((s) => s.context.region)
+  const cloud = useAuthSelector((s) => s.context.cloud)
+  const error = useAuthSelector((s) => s.context.error)
   const isSubmitting = useAuthSelector((s) => s.matches('submitting'))
+  const isSuccess = useAuthSelector((s) => s.matches('success'))
+  const didInitRegionRef = useRef(false)
 
-  const envReady = Boolean(status?.env.hasEmail && status?.env.hasPassword)
+  const likelyRegion = useMemo(() => getLikelyLoginRegion(), [])
+  const regionHint =
+    region === 'auto'
+      ? `Auto tries multiple regions on failure. Likely: ${likelyRegion.region}.`
+      : `Likely: ${likelyRegion.region}.`
+
   const canSubmit = useMemo(() => {
     if (!isTotpValid(totp)) return false
-    if (useEnv) return envReady
     return Boolean(email.trim() && password)
-  }, [email, password, totp, useEnv, envReady])
+  }, [email, password, totp])
+
+  useEffect(() => {
+    if (!isSuccess || !cloud) return
+    app.send({ type: 'auth_loginSuccess', cloud })
+  }, [app, cloud, isSuccess])
+
+  useEffect(() => {
+    if (didInitRegionRef.current) return
+    didInitRegionRef.current = true
+    const saved = getStoredLoginRegion()
+    if (saved) {
+      auth.send({ type: 'SET_REGION', region: saved })
+      return
+    }
+    auth.send({ type: 'SET_REGION', region: getLikelyLoginRegion().region })
+  }, [auth])
 
   return (
     <div className="app-shell">
       <header className="app-header app-header--simple">
         <div className="brand">
-          <div className="brand__title">Meross Cloud Key</div>
+          <div className="brand__title">Meross Account Login</div>
         </div>
       </header>
 
@@ -168,83 +245,93 @@ function KeyGateView() {
         <section className="panel">
           <header className="panel__head">
             <div>
-              <div className="panel__kicker">required</div>
-              <h2 className="panel__title">Link your account</h2>
+              <h2 className="panel__title">Sign In to Continue</h2>
             </div>
           </header>
 
-          <div className="panel__body">
+          <form
+            className="panel__body"
+            onSubmit={(e) => {
+              e.preventDefault()
+              persistLoginRegion(region)
+              auth.send({ type: 'SUBMIT' })
+            }}
+          >
             <div className="grid gap-4">
+              <div className="rac-field">
+                <label className="rac-field__label" htmlFor="login-region">
+                  Region
+                </label>
+                <select
+                  id="login-region"
+                  name="region"
+                  className="rac-field__input"
+                  value={region}
+                  onChange={(e) => {
+                    const next = e.currentTarget.value
+                    if (!isLoginRegion(next)) return
+                    auth.send({ type: 'SET_REGION', region: next })
+                  }}
+                  disabled={isSubmitting}
+                  required
+                >
+                  <option value="auto">Auto (Recommended)</option>
+                  <option value="global">Global (iotx.meross.com)</option>
+                  <option value="us">United States (iotx-us.meross.com)</option>
+                  <option value="eu">Europe (iotx-eu.meross.com)</option>
+                  <option value="ap">Asia-Pacific (iotx-ap.meross.com)</option>
+                </select>
+                <div className="rac-field__hint">{regionHint}</div>
+                <div className="rac-field__hint">Heuristic basis: {likelyRegion.reason}.</div>
+              </div>
+
               <TextField
-                label={useEnv ? 'Email (disabled: using server env)' : 'Email'}
+                label="Email"
                 value={email}
                 onChange={(email) => auth.send({ type: 'SET_EMAIL', email })}
-                placeholder="name@example.com"
-                isDisabled={isSubmitting || useEnv}
-                inputProps={INPUT_COMMON}
+                placeholder="name@example.com…"
+                isDisabled={isSubmitting}
+                inputProps={{ ...INPUT_EMAIL, name: 'email', required: true }}
               />
 
               <TextField
-                label={useEnv ? 'Password (disabled: using server env)' : 'Password'}
+                label="Password"
                 value={password}
                 onChange={(password) => auth.send({ type: 'SET_PASSWORD', password })}
-                placeholder="•••••••••"
-                isDisabled={isSubmitting || useEnv}
-                inputProps={INPUT_PASSWORD}
+                placeholder="Enter your password…"
+                isDisabled={isSubmitting}
+                inputProps={{ ...INPUT_PASSWORD, name: 'password', autoComplete: 'current-password', required: true }}
               />
 
               <TextField
                 label="TOTP (6 digits)"
                 value={totp}
-                onChange={(totp) => auth.send({ type: 'SET_TOTP', totp })}
-                placeholder="123456"
-                hint="Required."
+                onChange={(totp) => auth.send({ type: 'SET_TOTP', totp: totp.replace(/[^0-9]/g, '').slice(0, 6) })}
+                placeholder="123456…"
                 isDisabled={isSubmitting}
-                inputProps={INPUT_NUMERIC}
+                inputProps={{
+                  ...INPUT_NUMERIC,
+                  name: 'mfaCode',
+                  autoComplete: 'one-time-code',
+                  maxLength: 6,
+                  pattern: '[0-9]{6}',
+                  required: true,
+                }}
               />
             </div>
 
-            <details className="details mt-4">
-              <summary className="details__summary">Advanced</summary>
-              <div className="details__body">
-                <div className="callout">
-                  <div>
-                    <div className="callout__title">Server env credentials</div>
-                    <div className="callout__copy">Email/password: {envReady ? 'present' : 'missing'}.</div>
-                  </div>
-                  <div className="callout__right">
-                    <Switch
-                      isSelected={useEnv}
-                      onChange={(useEnv) => auth.send({ type: 'SET_USE_ENV', useEnv })}
-                      isDisabled={isSubmitting}
-                      label="Use server env"
-                      description={useEnv ? 'Email/password disabled' : 'Manual entry'}
-                    />
-                  </div>
-                </div>
+            {error ? (
+              <div className="panel__note panel__note--error" role="status" aria-live="polite">
+                {error}
               </div>
-            </details>
+            ) : null}
 
             <div className="actionRow mt-5">
-              <Button
-                tone="primary"
-                onPress={() => {
-                  auth.send({ type: 'SUBMIT' })
-                  const sub = auth.getSnapshot()
-                  if (sub?.matches('success')) {
-                    const cloud = sub.context.cloud
-                    if (cloud) {
-                      app.send({ type: 'auth_loginSuccess', cloud })
-                    }
-                  }
-                }}
-                isDisabled={isSubmitting || !canSubmit}
-                isPending={isSubmitting}
-              >
-                Fetch key
+              <Button tone="primary" type="submit" isDisabled={isSubmitting || !canSubmit} isPending={isSubmitting}>
+                Fetch Key & Device List
               </Button>
             </div>
-          </div>
+          </form>
         </section>
       </main>
     </div>
@@ -252,17 +339,14 @@ function KeyGateView() {
 }
 
 function InventoryViewInternal() {
-  const cloud = useAppSelector((s) => s.context.cloud)
   const devices = useDevicesSelector((s) => s.context.devices)
   const hosts = useDevicesSelector((s) => s.context.hosts)
   const deviceStates = useDevicesSelector((s) => s.context.deviceStates)
-  const cidr = useDevicesSelector((s) => s.context.cidr)
   const isScanning = useDevicesSelector(
     (s) => s.matches({ inventory: 'discoveringHosts' }) || s.matches({ inventory: 'suggestingCidr' }),
   )
   const isRefreshing = useDevicesSelector((s) => s.matches({ inventory: 'refreshingCloud' }))
-  const streamConnecting = useDevicesSelector((s) => s.matches({ monitor: 'connecting' }))
-  const streamLive = useDevicesSelector((s) => s.matches({ monitor: 'live' }))
+  const streamDegraded = useDevicesSelector((s) => s.matches({ monitor: 'degraded' }))
   const systemDump = useDevicesSelector((s) => s.context.systemDump)
   const devicesActor = useDevicesActorRef()
   const didAutoLoadRef = useRef(false)
@@ -270,21 +354,9 @@ function InventoryViewInternal() {
   const sawRefreshStartRef = useRef(false)
 
   const reloadBusy = Boolean(isRefreshing || isScanning)
-  const streamTone = streamLive ? 'ok' : streamConnecting ? 'muted' : 'err'
-  const streamLabel = streamLive ? 'live' : streamConnecting ? 'connecting' : 'degraded'
+  const reloadWorkingLabel = isRefreshing ? 'Syncing devices' : isScanning ? 'Scanning LAN' : ''
 
   const groups = useMemo(() => groupDevicesForControl(devices, hosts), [devices, hosts])
-
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      // Toast shown by machine
-    } catch {
-      // Toast shown by machine
-    }
-  }
-
-  const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : ''
 
   const startReload = () => {
     shouldScanAfterRefreshRef.current = true
@@ -315,16 +387,7 @@ function InventoryViewInternal() {
       <header className="app-header app-header--inventory">
         <div className="brand">
           <div className="brand__title">Merossity</div>
-          <div className="brand__sub">{cloudHint}</div>
         </div>
-
-        {cloud ? (
-          <div className="app-actions">
-            <Button tone="primary" onPress={() => void copy(cloud.key)}>
-              Copy key
-            </Button>
-          </div>
-        ) : null}
       </header>
 
       <main className="app-main">
@@ -334,7 +397,8 @@ function InventoryViewInternal() {
               <h2 className="panel__title">Devices</h2>
             </div>
             <div className="panel__headActions">
-              <div className={`chip chip--${streamTone}`}>stream: {streamLabel}</div>
+              {streamDegraded ? <div className="chip chip--err">Live updates degraded</div> : null}
+              {reloadBusy ? <div className="reloadWorkingLabel">{reloadWorkingLabel}</div> : null}
               <Button
                 tone="quiet"
                 className={`is-iconOnly reloadButton${reloadBusy ? 'is-busy' : ''}`}
@@ -358,18 +422,6 @@ function InventoryViewInternal() {
               </div>
             ) : null}
 
-            <div className="subpanel mt-4">
-              <TextField
-                label="CIDR (optional)"
-                value={cidr}
-                onChange={(cidr) => devicesActor.send({ type: 'SET_CIDR', cidr })}
-                placeholder="auto (recommended)"
-                hint="Leave blank to auto-suggest; set a CIDR to speed up scanning."
-                isDisabled={isScanning}
-                inputProps={INPUT_COMMON}
-              />
-            </div>
-
             {devices.length === 0 ? (
               <div className="emptyState mt-4">
                 <div className="emptyState__title">No devices yet.</div>
@@ -379,7 +431,6 @@ function InventoryViewInternal() {
               <div className="deviceGroups mt-5">
                 <DeviceGroup
                   title="Ready to control"
-                  count={groups.ready.length}
                   devices={devices}
                   hosts={hosts}
                   deviceStates={deviceStates}
@@ -389,7 +440,6 @@ function InventoryViewInternal() {
                 />
                 <DeviceGroup
                   title="Inaccessible"
-                  count={groups.inaccessible.length}
                   devices={devices}
                   hosts={hosts}
                   deviceStates={deviceStates}
@@ -434,7 +484,6 @@ function InventoryViewInternal() {
 
 function DeviceGroup(props: {
   title: string
-  count: number
   devices: any[]
   hosts: Record<string, any>
   deviceStates: Record<string, DeviceState>
@@ -442,7 +491,7 @@ function DeviceGroup(props: {
   emptyTitle: string
   emptyCopy: string
 }) {
-  const { title, count, devices, hosts, deviceStates, uuids, emptyTitle, emptyCopy } = props
+  const { title, devices, hosts, deviceStates, uuids, emptyTitle, emptyCopy } = props
   const filtered = devices
     .filter((d) => uuids.has(String(d.uuid ?? '')))
     .toSorted((a, b) => {
@@ -460,7 +509,6 @@ function DeviceGroup(props: {
     <section className="deviceGroup">
       <header className="deviceGroup__head">
         <div className="deviceGroup__title">{title}</div>
-        <div className="chip chip--muted">{count}</div>
       </header>
       <div className="deviceList">
         {filtered.length === 0 ? (
@@ -496,10 +544,6 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const host = props.hostEntry?.host ? String(props.hostEntry.host) : ''
   const hostUpdatedAt = props.hostEntry?.updatedAt ? String(props.hostEntry.updatedAt) : ''
 
-  const online = String(d.onlineStatus ?? '').toLowerCase()
-  const onlineTone =
-    online.includes('online') || online === '1' ? 'ok' : online.includes('offline') || online === '0' ? 'err' : 'muted'
-
   const title = String(d.devName ?? '') || uuid
   const model = String(d.deviceType ?? '').trim()
   const typeLabel = friendlyDeviceTypeFromModel(model)
@@ -526,28 +570,19 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
       ? `${l.stale ? 'stale' : 'state'} @ ${new Date(l.updatedAt).toLocaleTimeString()}${l.source ? ` · ${l.source}` : ''}`
       : 'state unknown'
 
+  const baseClass = `device${ready ? '' : ' device--inaccessible'}`
   return (
-    <article className={powerClass ? `device ${powerClass}` : 'device'}>
+    <article className={powerClass ? `${baseClass} ${powerClass}` : baseClass}>
       <header className="device__head">
         <div className="device__id">
           <div className="device__titleRow">
             <div className="device__title">{title}</div>
-            <div className={`chip chip--${onlineTone}`}>{online || 'unknown'}</div>
-            <div className={`chip chip--${lanChipTone}`}>lan: {lanOn === null ? 'unknown' : lanOn ? 'on' : 'off'}</div>
           </div>
           <div className="device__subtitle">{subtitle || 'device'}</div>
-          <div className="device__facts">
-            <div>
-              <span className="device__factKey">ip</span>{' '}
-              <span className="device__factVal">{host ? host : '(unknown)'}</span>
-            </div>
-          </div>
         </div>
 
         <div className="device__rowActions">
-          {!ready ? (
-            <div className="chip chip--muted">IP unavailable</div>
-          ) : togglable ? (
+          {ready && togglable ? (
             <>
               <Switch
                 isSelected={lanOn === true}
@@ -558,16 +593,8 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
                 label="Power"
                 description={undefined}
               />
-              <Button
-                tone="quiet"
-                className="is-iconOnly"
-                aria-label="Refresh device state"
-                onPress={() => devices.send({ type: 'monitor_REQUEST_REFRESH', uuid })}
-                isDisabled={toggleDisabled}
-                icon={<RefreshIcon />}
-              />
             </>
-          ) : (
+          ) : ready ? (
             <>
               <Button
                 tone="ghost"
@@ -586,7 +613,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
                 Off
               </Button>
             </>
-          )}
+          ) : null}
         </div>
       </header>
 
@@ -602,6 +629,9 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
         <summary className="details__summary">Details</summary>
         <div className="details__body">
           <div className="device__facts device__facts--open">
+            <div>
+              <span className="device__factKey">ip</span> <span className="device__factVal">{host || '(unknown)'}</span>
+            </div>
             <div>
               <span className="device__factKey">uuid</span> <span className="device__factVal">{uuid}</span>
             </div>
@@ -625,6 +655,14 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
               </div>
 
               <div className="device__actions">
+                <Button
+                  tone="quiet"
+                  onPress={() => devices.send({ type: 'monitor_REQUEST_REFRESH', uuid })}
+                  isDisabled={!host}
+                  icon={<RefreshIcon />}
+                >
+                  Refresh state
+                </Button>
                 <Button
                   tone="ghost"
                   onPress={() => devices.send({ type: 'device_DIAGNOSTICS', uuid })}

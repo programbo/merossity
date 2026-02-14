@@ -1,24 +1,52 @@
 import { assign, fromPromise, setup } from 'xstate'
-import { apiGet, apiPost } from '../lib/api'
-import type { CloudSummary, StatusResponse } from '../lib/types'
+import { ApiError, apiPost } from '../lib/api'
+import type { CloudSummary } from '../lib/types'
+
+export type LoginRegion = 'auto' | 'global' | 'us' | 'eu' | 'ap'
+
+const domainForRegion = (region: LoginRegion): string | undefined => {
+  if (region === 'global') return 'iotx.meross.com'
+  if (region === 'us') return 'iotx-us.meross.com'
+  if (region === 'eu') return 'iotx-eu.meross.com'
+  if (region === 'ap') return 'iotx-ap.meross.com'
+  return undefined
+}
 
 type AuthContext = {
-  useEnv: boolean
   email: string
   password: string
   totp: string
-  status: StatusResponse | null
+  region: LoginRegion
   cloud: CloudSummary | null
+  error: string | null
 }
 
 type AuthEvent =
-  | { type: 'SET_USE_ENV'; useEnv: boolean }
   | { type: 'SET_EMAIL'; email: string }
   | { type: 'SET_PASSWORD'; password: string }
   | { type: 'SET_TOTP'; totp: string }
+  | { type: 'SET_REGION'; region: LoginRegion }
   | { type: 'SUBMIT' }
 
 const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
+
+const formatAuthError = (error: unknown): string => {
+  if (!(error instanceof ApiError)) {
+    return error instanceof Error ? error.message : String(error)
+  }
+
+  const details = error.details && typeof error.details === 'object' ? (error.details as Record<string, unknown>) : null
+  const info = typeof details?.info === 'string' ? details.info.trim() : ''
+  const apiStatus = typeof details?.apiStatus === 'number' ? details.apiStatus : null
+
+  if (error.code === 'mfa_required') {
+    return 'MFA required. Enter a current 6-digit TOTP code and try again.'
+  }
+  if (info && apiStatus !== null) return `${info} (Meross status ${apiStatus}).`
+  if (info) return info
+  if (apiStatus !== null) return `${error.message} (Meross status ${apiStatus}).`
+  return error.message
+}
 
 export const authMachine = setup({
   types: {
@@ -26,21 +54,28 @@ export const authMachine = setup({
     events: {} as AuthEvent,
   },
   actions: {
-    setUseEnv: assign({
-      useEnv: (_, params: { useEnv: boolean }) => params.useEnv,
+    setEmail: assign((_, params: { email: string }) => ({
+      email: params.email,
+      error: null,
+    })),
+    setPassword: assign((_, params: { password: string }) => ({
+      password: params.password,
+      error: null,
+    })),
+    setTotp: assign((_, params: { totp: string }) => ({
+      totp: params.totp,
+      error: null,
+    })),
+    setRegion: assign((_, params: { region: LoginRegion }) => ({
+      region: params.region,
+      error: null,
+    })),
+    setCloud: assign({
+      cloud: (_, params: { cloud: CloudSummary | null }) => params.cloud,
+      error: null,
     }),
-    setEmail: assign({
-      email: (_, params: { email: string }) => params.email,
-    }),
-    setPassword: assign({
-      password: (_, params: { password: string }) => params.password,
-    }),
-    setTotp: assign({
-      totp: (_, params: { totp: string }) => params.totp,
-    }),
-    setStatusAndCloud: assign({
-      status: (_, params: { status: StatusResponse; cloud: CloudSummary | null }) => params.status,
-      cloud: (_, params: { status: StatusResponse; cloud: CloudSummary | null }) => params.cloud,
+    setError: assign({
+      error: (_, params: { message: string }) => params.message,
     }),
     clearSensitive: assign({
       password: '',
@@ -48,39 +83,21 @@ export const authMachine = setup({
     }),
   },
   guards: {
-    canSubmit: ({ context }) => {
-      const totpOk = isTotpValid(context.totp)
-      if (!totpOk) return false
-
-      if (context.useEnv) {
-        const st = context.status
-        return Boolean(st?.env.hasEmail && st?.env.hasPassword)
-      }
-
-      return Boolean(context.email.trim() && context.password)
-    },
+    canSubmit: ({ context }) => isTotpValid(context.totp) && Boolean(context.email.trim() && context.password),
   },
   actors: {
     loginFlow: fromPromise(
-      async ({ input }: { input: { useEnv: boolean; email: string; password: string; totp: string } }) => {
-        const body: { email?: string; password?: string; mfaCode: string } = { mfaCode: input.totp.trim() }
-
-        if (!input.useEnv) {
-          body.email = input.email.trim()
-          body.password = input.password
-        } else {
-          if (input.email.trim()) body.email = input.email.trim()
-          if (input.password) body.password = input.password
+      async ({ input }: { input: { email: string; password: string; totp: string; region: LoginRegion } }) => {
+        const domain = domainForRegion(input.region)
+        const body: { email: string; password: string; mfaCode: string; domain?: string } = {
+          email: input.email.trim(),
+          password: input.password,
+          mfaCode: input.totp.trim(),
         }
+        if (domain) body.domain = domain
 
         const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
-        const [status, cloud] = await Promise.all([
-          apiGet<StatusResponse>('/api/status'),
-          apiGet<{ cloud: CloudSummary | null }>('/api/cloud/creds')
-            .then((r) => r.cloud)
-            .catch(() => null),
-        ])
-        return { status, cloud, resCloud: res.cloud }
+        return { cloud: res.cloud }
       },
     ),
   },
@@ -88,18 +105,18 @@ export const authMachine = setup({
   id: 'auth',
   initial: 'editing',
   context: {
-    useEnv: false,
     email: '',
     password: '',
     totp: '',
-    status: null,
+    region: 'auto',
     cloud: null,
+    error: null,
   },
   on: {
-    SET_USE_ENV: { actions: { type: 'setUseEnv', params: ({ event }) => ({ useEnv: event.useEnv }) } },
     SET_EMAIL: { actions: { type: 'setEmail', params: ({ event }) => ({ email: event.email }) } },
     SET_PASSWORD: { actions: { type: 'setPassword', params: ({ event }) => ({ password: event.password }) } },
     SET_TOTP: { actions: { type: 'setTotp', params: ({ event }) => ({ totp: event.totp }) } },
+    SET_REGION: { actions: { type: 'setRegion', params: ({ event }) => ({ region: event.region }) } },
   },
   states: {
     editing: {
@@ -108,30 +125,36 @@ export const authMachine = setup({
       },
     },
     submitting: {
-      entry: 'clearSensitive',
       invoke: {
         src: 'loginFlow',
         input: ({ context }) => ({
-          useEnv: context.useEnv,
           email: context.email,
           password: context.password,
           totp: context.totp,
+          region: context.region,
         }),
         onDone: {
           target: 'success',
           actions: [
             {
-              type: 'setStatusAndCloud',
+              type: 'setCloud',
               params: ({ event }) => ({
-                status: event.output.status,
-                cloud: event.output.cloud ?? event.output.resCloud ?? null,
+                cloud: event.output.cloud ?? null,
               }),
             },
+            { type: 'clearSensitive' },
           ],
         },
         onError: {
           target: 'editing',
-          actions: [],
+          actions: [
+            {
+              type: 'setError',
+              params: ({ event }) => ({
+                message: formatAuthError(event.error),
+              }),
+            },
+          ],
         },
       },
     },

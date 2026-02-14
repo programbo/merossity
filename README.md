@@ -22,12 +22,10 @@ Open `http://localhost:3000` (if `3000` is taken, the server will increment unti
 
 **Configuration**
 
-- `MEROSS_EMAIL`, `MEROSS_PASSWORD`: optional defaults for cloud login (can also enter in the UI)
+- Web login requires explicit email/password + TOTP in the UI.
 - `MEROSS_KEY`: optional fallback for LAN control if you do not log in via cloud
 - `MEROSS_CONFIG_PATH`: override config location (default `~/.config/merossity/config.json`)
 - `PORT`, `PORT_OFFSET`: dev server port controls
-
-Note: `apps/web` will try to load a `.env` from the repo root automatically, even when you run the server from `apps/web`.
 
 ## CLI (packages/cli)
 

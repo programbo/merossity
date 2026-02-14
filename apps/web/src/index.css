@@ -233,6 +233,22 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  .panel__headActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .reloadWorkingLabel {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: rgba(242, 246, 255, 0.62);
+    white-space: nowrap;
+  }
+
   .panel__kicker {
     font-size: 11px;
     text-transform: uppercase;
@@ -267,6 +283,10 @@
     font-size: 13px;
     color: var(--muted);
     line-height: 1.5;
+  }
+
+  .panel__note--error {
+    color: rgba(255, 120, 120, 0.92);
   }
 
   .callout {
@@ -381,6 +401,7 @@
   }
 
   .device {
+    position: relative;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.05);
     border-radius: var(--radius-lg);
@@ -388,9 +409,57 @@
   }
 
   .device--power-on {
-    border-color: rgba(45, 212, 191, 0.28);
+    /* Warm/neutral glow for better visibility (avoid green reliance). */
+    border-color: rgba(255, 176, 72, 0.34);
     background:
-      radial-gradient(620px 220px at 10% 0%, rgba(45, 212, 191, 0.14), transparent 62%), rgba(255, 255, 255, 0.05);
+      radial-gradient(620px 260px at 22% -10%, rgba(255, 176, 72, 0.22), transparent 62%),
+      radial-gradient(560px 300px at 70% 110%, rgba(255, 255, 255, 0.1), transparent 58%),
+      rgba(255, 255, 255, 0.05);
+    box-shadow:
+      0 22px 54px rgba(0, 0, 0, 0.42),
+      0 12px 42px rgba(255, 176, 72, 0.18),
+      0 0 76px rgba(255, 255, 255, 0.1),
+      0 0 0 1px rgba(255, 176, 72, 0.28) inset;
+  }
+
+  /* Backlight "On" cards so the glass looks illuminated. */
+  .device--power-on::before {
+    content: '';
+    position: absolute;
+    inset: -24px;
+    border-radius: calc(var(--radius-lg) + 24px);
+    background:
+      radial-gradient(closest-side, rgba(255, 176, 72, 0.22), transparent 64%),
+      radial-gradient(closest-side, rgba(255, 255, 255, 0.18), transparent 72%);
+    filter: blur(20px) saturate(125%);
+    opacity: 1;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .device > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .device--inaccessible .device__title {
+    color: rgba(242, 246, 255, 0.68);
+  }
+
+  .device--inaccessible .device__subtitle {
+    color: rgba(242, 246, 255, 0.32);
+  }
+
+  .device--inaccessible .details__summary {
+    color: rgba(242, 246, 255, 0.5);
+  }
+
+  .device--inaccessible .device__factKey {
+    color: rgba(242, 246, 255, 0.28);
+  }
+
+  .device--inaccessible .device__factVal {
+    color: rgba(242, 246, 255, 0.58);
   }
 
   .device--power-off {
@@ -797,6 +866,18 @@
     border-color: rgba(45, 212, 191, 0.35);
     box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.16);
     background: rgba(0, 0, 0, 0.28);
+  }
+
+  .rac-field__input:focus-visible {
+    border-color: rgba(45, 212, 191, 0.35);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.16);
+    background: rgba(0, 0, 0, 0.28);
+  }
+
+  select.rac-field__input {
+    appearance: none;
+    background-color: rgba(0, 0, 0, 0.22);
+    color: rgba(242, 246, 255, 0.92);
   }
 
   .rac-field__hint {

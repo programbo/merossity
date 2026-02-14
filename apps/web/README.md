@@ -31,12 +31,10 @@ bun dev
 
 ## Configuration
 
-- `MEROSS_EMAIL`, `MEROSS_PASSWORD`: optional defaults for cloud login (you can also type in the UI)
+- Cloud login requires explicit email/password + TOTP via the UI.
 - `MEROSS_KEY`: optional fallback LAN key if you do not log in via cloud
 - `MEROSS_CONFIG_PATH`: override config path (default `~/.config/merossity/config.json`)
 - `PORT`, `PORT_OFFSET`: control dev server port selection
-
-Note: `apps/web` will try to load a `.env` from the repo root automatically.
 
 ## Ports
 

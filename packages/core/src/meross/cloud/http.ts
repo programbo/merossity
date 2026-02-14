@@ -1,16 +1,49 @@
 import crypto from 'node:crypto'
+import os from 'node:os'
 import type { MerossCloudApiResponse, MerossCloudCredentials, MerossCloudDevice } from './types'
 import { MerossCloudError } from './types'
 
 const SECRET = '23x17ahWarFH6w29'
 const DEFAULT_DOMAIN = 'iotx.meross.com'
+// MerossIot documents distinct regional API bases. Hitting the wrong one can yield 1004.
+const DEFAULT_FALLBACK_DOMAINS = [
+  DEFAULT_DOMAIN,
+  'iotx-ap.meross.com',
+  'iotx-us.meross.com',
+  'iotx-eu.meross.com',
+] as const
 
 const md5Hex = (s: string): string => crypto.createHash('md5').update(s, 'utf8').digest('hex')
 const base64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
 
 const randomNonce = (): string => crypto.randomBytes(16).toString('hex')
+const LOG_IDENTIFIER = crypto.randomUUID()
 
 const stripScheme = (domain: string): string => domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+
+// Align defaults with MerossIot (python) to reduce auth drift.
+const DEFAULT_APP_TYPE = 'MerossIOT'
+const DEFAULT_APP_VERSION = '0.4.10.3'
+const DEFAULT_UA_HEADER = `MerossIOT/${DEFAULT_APP_VERSION}`
+const DEFAULT_COUNTRY_CODE = 'us'
+
+const authDebugLevel = (): 0 | 1 | 2 => {
+  const raw = String(process.env.MEROSS_DEBUG_AUTH ?? '')
+    .trim()
+    .toLowerCase()
+  if (!raw || raw === '0' || raw === 'false' || raw === 'off') return 0
+  if (raw === '2' || raw === 'verbose' || raw === 'debug') return 2
+  return 1
+}
+
+const logAuthDebug = (level: 0 | 1 | 2, requiredLevel: 1 | 2, message: string, data?: unknown) => {
+  if (level < requiredLevel) return
+  if (data === undefined) {
+    console.log(`[auth-debug] ${message}`)
+    return
+  }
+  console.log(`[auth-debug] ${message}`, data)
+}
 
 export type MerossCloudHttpOptions = {
   fetch?: typeof fetch
@@ -43,6 +76,7 @@ const authenticatedPost = async <TData>(
     scheme: 'https' | 'http'
     fetchImpl: typeof fetch
     timeoutMs: number
+    debugLevel?: 0 | 1 | 2
   },
 ): Promise<MerossCloudApiResponse<TData>> => {
   const nonce = randomNonce()
@@ -52,34 +86,77 @@ const authenticatedPost = async <TData>(
   // Per Meross app protocol (as implemented by meross-cloud): md5(SECRET + timestamp + nonce + paramsB64)
   const sign = md5Hex(`${SECRET}${timestampMs}${nonce}${encodedParams}`)
 
-  const body = new URLSearchParams()
-  body.set('params', encodedParams)
-  body.set('sign', sign)
-  body.set('timestamp', String(timestampMs))
-  body.set('nonce', nonce)
+  const payload = {
+    params: encodedParams,
+    sign,
+    timestamp: timestampMs,
+    nonce,
+  }
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs)
   try {
     const url = `${opts.scheme}://${opts.domain}${endpoint}`
+    logAuthDebug(opts.debugLevel ?? 0, 1, 'HTTP request', {
+      url,
+      endpoint,
+      timeoutMs: opts.timeoutMs,
+      hasToken: Boolean(opts.token),
+      timestampMs,
+      nonce,
+    })
+    logAuthDebug(opts.debugLevel ?? 0, 2, 'HTTP request payload', {
+      sign,
+      params,
+      paramsB64: encodedParams,
+    })
+
+    const startedAt = Date.now()
+    const headers: Record<string, string> = {
+      AppVersion: DEFAULT_APP_VERSION,
+      // MerossIot uses header key 'vender' with lowercase value.
+      vender: 'meross',
+      AppType: DEFAULT_APP_TYPE,
+      AppLanguage: 'EN',
+      'User-Agent': DEFAULT_UA_HEADER,
+      'Content-Type': 'application/json',
+      // Match MerossIot: 'Basic' with no token for login.
+      Authorization: opts.token ? `Basic ${opts.token}` : 'Basic',
+    }
+
     const res = await opts.fetchImpl(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${opts.token ?? ''}`,
-        Vendor: 'Meross',
-        AppVersion: '1.3.0',
-        AppLanguage: 'en',
-        'User-Agent': 'okhttp/3.6.0',
-      },
-      body,
+      headers,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
 
-    const json = (await res.json().catch(() => null)) as MerossCloudApiResponse<TData> | null
+    const rawText = await res.text().catch(() => '')
+    const elapsedMs = Date.now() - startedAt
+    logAuthDebug(opts.debugLevel ?? 0, 1, 'HTTP response', {
+      url,
+      status: res.status,
+      ok: res.ok,
+      elapsedMs,
+    })
+    logAuthDebug(opts.debugLevel ?? 0, 2, 'HTTP response raw body', rawText)
+
+    const json = (() => {
+      try {
+        return rawText ? (JSON.parse(rawText) as MerossCloudApiResponse<TData>) : null
+      } catch {
+        return null
+      }
+    })()
     if (!json || typeof json !== 'object' || typeof (json as any).apiStatus !== 'number') {
       throw new MerossCloudError(`Invalid cloud response (${res.status})`)
     }
+    logAuthDebug(opts.debugLevel ?? 0, 1, 'Meross API response', {
+      url,
+      apiStatus: json.apiStatus,
+      info: (json as any).info,
+      dataKeys: json.data && typeof json.data === 'object' ? Object.keys(json.data as any).slice(0, 12) : [],
+    })
     return json
   } finally {
     clearTimeout(timeout)
@@ -95,6 +172,7 @@ const postWithRedirect = async <TData>(
     scheme: 'https' | 'http'
     fetchImpl: typeof fetch
     timeoutMs: number
+    debugLevel?: 0 | 1 | 2
   },
 ): Promise<{ domain: string; resp: MerossCloudApiResponse<TData> }> => {
   let domain = stripScheme(opts.domain)
@@ -128,35 +206,85 @@ export const merossCloudLogin = async (
   const scheme = options.scheme ?? 'https'
 
   const passwordHash = md5Hex(params.password)
+  const debugLevel = authDebugLevel()
+
+  if (debugLevel > 0) {
+    logAuthDebug(debugLevel, 1, 'Meross signIn payload', {
+      email: params.email,
+      password: params.password,
+      passwordHash,
+      mfaCode: params.mfaCode,
+      domain,
+      scheme,
+    })
+  }
 
   const deviceInfo = {
-    os: process.platform,
-    osVersion: process.version,
-    uuid: crypto.randomUUID(),
-    model: 'Bun',
+    deviceModel: typeof (os as any).machine === 'function' ? String((os as any).machine()) : process.arch,
+    mobileOsVersion: typeof os.release === 'function' ? String(os.release()) : process.version,
+    mobileOs: typeof os.platform === 'function' ? String(os.platform()) : process.platform,
+    uuid: LOG_IDENTIFIER,
+    carrier: '',
   }
 
   const signInParams: Record<string, unknown> = {
     email: params.email,
     password: passwordHash,
-    accountCountryCode: '',
-    agree: 1,
-    // If the server honors encryption=1, responses may be encrypted. We currently do
-    // not implement decryption, so prefer plaintext by default.
-    encryption: options.encryption ?? 0,
+    accountCountryCode: DEFAULT_COUNTRY_CODE,
+    agree: 0,
+    // MerossIot uses encryption=1; Meross still returns plaintext for this flow.
+    encryption: options.encryption ?? 1,
     mobileInfo: deviceInfo,
   }
   if (params.mfaCode) signInParams.mfaCode = params.mfaCode
 
-  const { domain: resolvedDomain, resp } = await postWithRedirect<any>('/v1/Auth/signIn', signInParams, {
-    domain,
-    scheme,
-    fetchImpl,
-    timeoutMs,
-  })
+  const domainCandidates = options.domain
+    ? (() => {
+        const defaults = DEFAULT_FALLBACK_DOMAINS.map((d) => stripScheme(d))
+        if (!defaults.includes(domain as (typeof defaults)[number])) return [domain]
+        return [domain, ...defaults.filter((d) => d !== domain)]
+      })()
+    : Array.from(new Set(DEFAULT_FALLBACK_DOMAINS.map((d) => stripScheme(d))))
 
-  if (resp.apiStatus !== 0) {
-    throw new MerossCloudError(`Cloud signIn failed`, resp.apiStatus, resp.info)
+  let resolvedDomain = domain
+  let resp: MerossCloudApiResponse<any> | null = null
+
+  logAuthDebug(debugLevel, 1, 'Meross signIn domain candidates', { domainCandidates })
+
+  for (let i = 0; i < domainCandidates.length; i++) {
+    const candidate = domainCandidates[i]!
+    logAuthDebug(debugLevel, 1, 'Meross signIn attempt', { attempt: i + 1, total: domainCandidates.length, domain: candidate })
+    const result = await postWithRedirect<any>('/v1/Auth/signIn', signInParams, {
+      domain: candidate,
+      scheme,
+      fetchImpl,
+      timeoutMs,
+      debugLevel,
+    })
+    resolvedDomain = result.domain
+    resp = result.resp
+
+    if (resp.apiStatus === 0) break
+
+    const canRetryAlternate = resp.apiStatus === 1004 && i < domainCandidates.length - 1
+    if (canRetryAlternate) {
+      logAuthDebug(debugLevel, 1, 'signIn failed on domain, retrying alternate domain', {
+        triedDomain: candidate,
+        nextDomain: domainCandidates[i + 1],
+        apiStatus: resp.apiStatus,
+        info: resp.info,
+      })
+    }
+    if (!canRetryAlternate) break
+  }
+
+  if (!resp || resp.apiStatus !== 0) {
+    logAuthDebug(debugLevel, 1, 'Meross signIn final failure', {
+      apiStatus: resp?.apiStatus,
+      info: resp?.info,
+      resolvedDomain,
+    })
+    throw new MerossCloudError(`Cloud signIn failed`, resp?.apiStatus, resp?.info)
   }
 
   const data = resp.data ?? {}

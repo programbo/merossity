@@ -9,11 +9,6 @@ export const createGetStatusHandler = () => ({
   async GET() {
     const cfg = await readConfig()
     return apiOk({
-      env: {
-        hasEmail: Boolean(process.env.MEROSS_EMAIL),
-        hasPassword: Boolean(process.env.MEROSS_PASSWORD),
-        hasKey: Boolean(process.env.MEROSS_KEY),
-      },
       config: {
         path: configPath(),
         hasCloudCreds: Boolean(cfg.cloud?.token && cfg.cloud?.key),

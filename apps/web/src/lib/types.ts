@@ -18,14 +18,3 @@ export type MerossCloudDevice = {
   channels?: Array<Record<string, unknown>>
   [k: string]: unknown
 }
-
-export type StatusResponse = {
-  env: { hasEmail: boolean; hasPassword: boolean; hasKey: boolean }
-  config: {
-    path: string
-    hasCloudCreds: boolean
-    hasDevices: boolean
-    hasHosts: boolean
-    updatedAt: { cloud?: string; devices?: string }
-  }
-}

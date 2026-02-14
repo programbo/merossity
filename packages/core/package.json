@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./api": "./src/api/index.ts",
-    "./lib": "./src/lib/index.ts",
     "./meross": "./src/meross/index.ts",
     "./meross/inventory": "./src/meross/inventory.ts"
   },

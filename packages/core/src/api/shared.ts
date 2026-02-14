@@ -13,11 +13,14 @@ export type ApiErr = { ok: false; error: { message: string; code?: string; detai
 
 export const apiOk = <T>(data: T): Response => jsonContent({ ok: true, data })
 
-export const apiErr = (message: string, code?: string, details?: unknown): Response =>
-  jsonContent({
-    ok: false,
-    error: { message, code, details },
-  })
+export const apiErr = (message: string, code?: string, details?: unknown, init?: ResponseInit): Response =>
+  jsonContent(
+    {
+      ok: false,
+      error: { message, code, details },
+    },
+    init,
+  )
 
 export const jsonContent = <T = unknown>(data: ApiOk<T> | ApiErr, init?: ResponseInit): Response =>
   applySecurityHeaders(Response.json(data, init))
