@@ -2,88 +2,50 @@
 
 ```mermaid
 stateDiagram-v2
-    [*] --> idle
+    [*] --> inventory
+    [*] --> operations
+    [*] --> monitor
 
-    idle --> refreshingCloud: REFRESH
-    idle --> suggestingCidr: SCAN<br/>(needsCidrSuggest guard)
-    idle --> discoveringHosts: SCAN<br/>(has CIDR)
-    idle --> resolving: device_RESOLVE
-    idle --> toggling: device_TOGGLE<br/>(hasHost guard)
-    idle --> fetchingState: device_REFRESH_STATE
-    idle --> fetchingDiagnostics: device_DIAGNOSTICS<br/>(hasHost guard)
+    state inventory {
+      [*] --> idle
+      idle --> refreshingCloud: REFRESH
+      idle --> suggestingCidr: SCAN (needsCidrSuggest)
+      idle --> discoveringHosts: SCAN (has CIDR)
+      refreshingCloud --> idle: onDone / onError
+      suggestingCidr --> discoveringHosts: onDone / onError
+      discoveringHosts --> idle: onDone / onError
+    }
 
-    refreshingCloud --> idle: onDone<br/>(setDevices)
-    refreshingCloud --> idle: onError
+    state operations {
+      [*] --> idle
+      idle --> resolving: device_RESOLVE
+      idle --> toggling: device_TOGGLE (hasHost)
+      idle --> fetchingDiagnostics: device_DIAGNOSTICS (hasHost)
+      resolving --> idle: onDone / onError
+      toggling --> idle: onDone / onError
+      fetchingDiagnostics --> idle: onDone / onError
+    }
 
-    suggestingCidr --> discoveringHosts: onDone<br/>(setCidrIfEmpty)
-    suggestingCidr --> discoveringHosts: onError
+    state monitor {
+      [*] --> connecting
+      connecting --> live: monitor_STREAM_CONNECTED
+      connecting --> degraded: monitor_STREAM_DISCONNECTED
+      live --> degraded: monitor_STREAM_DISCONNECTED
+      degraded --> live: monitor_STREAM_CONNECTED
+    }
 
-    discoveringHosts --> idle: onDone<br/>(setHosts)
-    discoveringHosts --> idle: onError
-
-    resolving --> idle: onDone<br/>(setHosts + clearActiveOperation)
-    resolving --> idle: onError<br/>(clearActiveOperation)
-
-    toggling --> idle: onDone<br/>(clearActiveOperation)
-    toggling --> idle: onError<br/>(setDeviceError + clearActiveOperation)
-
-    fetchingState --> idle: onDone<br/>(clearDeviceError + setDeviceState + clearActiveOperation)
-    fetchingState --> idle: onError<br/>(setDeviceError + clearActiveOperation)
-
-    fetchingDiagnostics --> idle: onDone<br/>(setSystemDump + clearActiveOperation)
-    fetchingDiagnostics --> idle: onError<br/>(clearActiveOperation)
-
-    note right of idle
-        Global Events (always handled):
-        - SET_CIDR → setCidr action
-        - CLOSE_SYSTEM_DUMP → setSystemDump(null)
+    note right of monitor
+      Actor: streamEvents (EventSource /api/events/stream)
+      Events consumed globally:
+      - monitor_SNAPSHOT
+      - monitor_STATE_RECEIVED
+      - monitor_DEVICE_STALE
     end note
 
-    note right of refreshingCloud
-        Actor: refreshFromCloud
-        API: POST /api/cloud/devices/refresh
-        Output: { count, list: MerossCloudDevice[] }
-    end note
-
-    note right of suggestingCidr
-        Actor: suggestCidr
-        API: GET /api/lan/cidr-suggest
-        Output: { suggestions, default }
-    end note
-
-    note right of discoveringHosts
-        Actor: discoverHosts
-        Entry: persistCidr (localStorage)
-        API: POST /api/hosts/discover
-        Output: { cidr, count, hosts, hostsAll }
-    end note
-
-    note right of resolving
-        Actor: resolveHost
-        Entry: setActiveOperation(resolving)
-        API: POST /api/hosts/resolve
-        Input: { uuid, mac, cidr }
-    end note
-
-    note right of toggling
-        Actor: toggleDevice
-        Entry: setActiveOperation(toggling)
-        API: POST /api/device/toggle
-        Input: { uuid, channel, onoff }
-    end note
-
-    note right of fetchingState
-        Actor: fetchDeviceState
-        Entry: setActiveOperation(fetchingState)
-        API: POST /api/device/state
-        Output: { host, channel, onoff, channels }
-    end note
-
-    note right of fetchingDiagnostics
-        Actor: fetchDiagnostics
-        Entry: setActiveOperation(fetchingDiagnostics)
-        API: POST /api/device/system-all
-        Output: { host, data: unknown }
+    note right of operations
+      Manual refresh no longer enters a blocking state.
+      device_REFRESH_STATE / monitor_REQUEST_REFRESH
+      trigger POST /api/device/states and wait for SSE updates.
     end note
 ```
 
@@ -91,48 +53,29 @@ stateDiagram-v2
 
 ```typescript
 type DevicesContext = {
-  devices: MerossCloudDevice[]      // Cloud device list
-  hosts: HostsMap                     // Discovered LAN hosts
-  cidr: string                        // Network CIDR range
-  deviceStates: Record<string, DeviceState>  // Per-device state cache
-  systemDump: SystemDump | null       // Diagnostics data
-  activeOperation: ActiveOperation    // Currently running operation
+  devices: MerossCloudDevice[]
+  hosts: HostsMap
+  cidr: string
+  deviceStates: Record<string, DeviceState>
+  systemDump: SystemDump | null
+  activeDeviceUuid: string | null
+  toggleRollback: { uuid: string; previous: DeviceState | null } | null
 }
 ```
 
-## Guards
-
-| Guard | Purpose |
-|-------|---------|
-| `needsCidrSuggest` | Returns true if CIDR is empty/whitespace |
-| `hasHost(uuid)` | Returns true if device has a known host in `hosts[uuid]` |
-| `isActiveOperationFor(uuid, operationType)` | Returns true if operation is active for device |
-
-## Actions
-
-| Action | Purpose |
-|--------|---------|
-| `setDevices` | Update `devices` array from cloud |
-| `setHosts` | Update `hosts` map from discovery |
-| `setCidr` | Update `cidr` string |
-| `setCidrIfEmpty` | Set CIDR only if current is empty |
-| `persistCidr` | Save CIDR to localStorage |
-| `setActiveOperation` | Mark operation as active for device |
-| `clearActiveOperation` | Clear active operation flag |
-| `setDeviceState` | Update state cache for device |
-| `clearDeviceError` | Remove error from device state |
-| `setDeviceError` | Set error message on device state |
-| `setSystemDump` | Update system dump data |
-
 ## Events Reference
 
-| Event | Payload | Target States |
-|-------|----------|--------------|
-| `REFRESH` | - | `refreshingCloud` |
-| `SCAN` | - | `suggestingCidr` (if needs CIDR) or `discoveringHosts` |
-| `SET_CIDR` | `{ cidr: string }` | Global (no transition) |
-| `device_RESOLVE` | `{ uuid, mac, title }` | `resolving` |
-| `device_TOGGLE` | `{ uuid, onoff: 0\|1 }` | `toggling` (if has host) |
-| `device_REFRESH_STATE` | `{ uuid }` | `fetchingState` |
-| `device_DIAGNOSTICS` | `{ uuid }` | `fetchingDiagnostics` (if has host) |
-| `CLOSE_SYSTEM_DUMP` | - | Global (no transition) |
+| Event | Payload | Notes |
+|-------|----------|-------|
+| `REFRESH` | - | Refresh cloud inventory and hosts |
+| `SCAN` | - | Discover LAN hosts |
+| `SET_CIDR` | `{ cidr: string }` | Persists local + server CIDR |
+| `device_RESOLVE` | `{ uuid, mac, title }` | Resolve host by MAC/scan |
+| `device_TOGGLE` | `{ uuid, onoff: 0\|1 }` | Optimistic toggle + LAN command |
+| `device_REFRESH_STATE` | `{ uuid }` | Immediate poll request (non-blocking) |
+| `monitor_REQUEST_REFRESH` | `{ uuid }` | Same as manual refresh trigger |
+| `monitor_SNAPSHOT` | `{ states }` | Initial SSE snapshot merge |
+| `monitor_STATE_RECEIVED` | `{ state }` | Incremental SSE state update |
+| `monitor_DEVICE_STALE` | `{ state }` | SSE stale/failure state update |
+| `device_DIAGNOSTICS` | `{ uuid }` | Fetch `Appliance.System.All` dump |
+| `CLOSE_SYSTEM_DUMP` | - | Clear diagnostics modal |

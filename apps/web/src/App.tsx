@@ -19,7 +19,16 @@ const INPUT_NUMERIC = { ...INPUT_COMMON, inputMode: 'numeric' as const } as cons
 const isTotpValid = (s: string) => /^[0-9]{6}$/.test(String(s ?? '').trim())
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
-type DeviceState = { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[]; updatedAt: number }
+type DeviceState = {
+  host: string
+  channel: number
+  onoff: 0 | 1
+  channels?: LanToggleXChannel[]
+  updatedAt: number
+  stale?: boolean
+  source?: string
+  error?: string
+}
 
 type HostEntry = { host?: string; mac?: string; updatedAt?: string } | undefined
 
@@ -252,6 +261,8 @@ function InventoryViewInternal() {
     (s) => s.matches({ inventory: 'discoveringHosts' }) || s.matches({ inventory: 'suggestingCidr' }),
   )
   const isRefreshing = useDevicesSelector((s) => s.matches({ inventory: 'refreshingCloud' }))
+  const streamConnecting = useDevicesSelector((s) => s.matches({ monitor: 'connecting' }))
+  const streamLive = useDevicesSelector((s) => s.matches({ monitor: 'live' }))
   const systemDump = useDevicesSelector((s) => s.context.systemDump)
   const devicesActor = useDevicesActorRef()
   const didAutoLoadRef = useRef(false)
@@ -259,6 +270,8 @@ function InventoryViewInternal() {
   const sawRefreshStartRef = useRef(false)
 
   const reloadBusy = Boolean(isRefreshing || isScanning)
+  const streamTone = streamLive ? 'ok' : streamConnecting ? 'muted' : 'err'
+  const streamLabel = streamLive ? 'live' : streamConnecting ? 'connecting' : 'degraded'
 
   const groups = useMemo(() => groupDevicesForControl(devices, hosts), [devices, hosts])
 
@@ -321,6 +334,7 @@ function InventoryViewInternal() {
               <h2 className="panel__title">Devices</h2>
             </div>
             <div className="panel__headActions">
+              <div className={`chip chip--${streamTone}`}>stream: {streamLabel}</div>
               <Button
                 tone="quiet"
                 className={`is-iconOnly reloadButton${reloadBusy ? 'is-busy' : ''}`}
@@ -473,9 +487,6 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const isToggling = useDevicesSelector(
     (s) => s.matches({ operations: 'toggling' }) && s.context.activeDeviceUuid === uuid,
   )
-  const isFetchingState = useDevicesSelector(
-    (s) => s.matches({ operations: 'fetchingState' }) && s.context.activeDeviceUuid === uuid,
-  )
   const isFetchingDiagnostics = useDevicesSelector(
     (s) => s.matches({ operations: 'fetchingDiagnostics' }) && s.context.activeDeviceUuid === uuid,
   )
@@ -504,7 +515,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const ch0 = l?.channels?.find((c) => c.channel === 0) ?? (l ? { channel: 0, onoff: l.onoff } : null)
   const lanOn = ch0 ? ch0.onoff === 1 : null
   const powerClass = lanOn === null ? '' : lanOn ? 'device--power-on' : 'device--power-off'
-  const lanChipTone = lanOn === null ? 'muted' : lanOn ? 'ok' : 'muted'
+  const lanChipTone = l?.stale ? 'err' : lanOn === null ? 'muted' : lanOn ? 'ok' : 'muted'
 
   const togglable = ready && prefersToggleFor(d)
   const toggleDisabled = !ready || isToggling
@@ -512,7 +523,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const lanDesc = !ready
     ? 'ip unavailable'
     : l
-      ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
+      ? `${l.stale ? 'stale' : 'state'} @ ${new Date(l.updatedAt).toLocaleTimeString()}${l.source ? ` · ${l.source}` : ''}`
       : 'state unknown'
 
   return (
@@ -551,9 +562,9 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
                 tone="quiet"
                 className="is-iconOnly"
                 aria-label="Refresh device state"
-                onPress={() => devices.send({ type: 'device_REFRESH_STATE', uuid })}
+                onPress={() => devices.send({ type: 'monitor_REQUEST_REFRESH', uuid })}
                 isDisabled={toggleDisabled}
-                icon={<RefreshIcon className={isFetchingState ? 'iconSpin' : undefined} />}
+                icon={<RefreshIcon />}
               />
             </>
           ) : (
@@ -585,7 +596,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
           const el = e.currentTarget as HTMLDetailsElement
           if (!el.open) return
           if (!ready) return
-          devices.send({ type: 'device_REFRESH_STATE', uuid })
+          devices.send({ type: 'monitor_REQUEST_REFRESH', uuid })
         }}
       >
         <summary className="details__summary">Details</summary>

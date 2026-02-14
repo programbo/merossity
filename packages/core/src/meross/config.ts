@@ -15,6 +15,7 @@ export type MerossConfig = {
   cloud?: MerossCloudCredentials & { updatedAt: string }
   devices?: { updatedAt: string; list: MerossCloudDevice[] }
   hosts?: MerossDeviceHostMap
+  network?: { cidr?: string; updatedAt: string }
 }
 
 export function defaultMerossConfigPath(): string {

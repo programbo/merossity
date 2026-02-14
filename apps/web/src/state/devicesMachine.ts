@@ -1,4 +1,4 @@
-import { assign, fromPromise, setup, assertEvent } from 'xstate'
+import { assign, assertEvent, fromCallback, fromPromise, setup } from 'xstate'
 import { apiGet, apiPost } from '../lib/api'
 import type { CloudSummary, MerossCloudDevice } from '../lib/types'
 
@@ -12,6 +12,20 @@ type DeviceState = {
   onoff: 0 | 1
   channels?: LanToggleXChannel[]
   updatedAt: number
+  stale?: boolean
+  source?: string
+  error?: string
+}
+
+type StreamDeviceState = {
+  uuid: string
+  host: string
+  channel: number
+  onoff: 0 | 1
+  channels?: LanToggleXChannel[]
+  updatedAt: number
+  stale: boolean
+  source?: string
   error?: string
 }
 
@@ -35,6 +49,12 @@ type DevicesEvent =
   | { type: 'device_TOGGLE'; uuid: string; onoff: 0 | 1 }
   | { type: 'device_REFRESH_STATE'; uuid: string }
   | { type: 'device_DIAGNOSTICS'; uuid: string }
+  | { type: 'monitor_STREAM_CONNECTED' }
+  | { type: 'monitor_STREAM_DISCONNECTED' }
+  | { type: 'monitor_STATE_RECEIVED'; state: StreamDeviceState }
+  | { type: 'monitor_DEVICE_STALE'; state: StreamDeviceState }
+  | { type: 'monitor_SNAPSHOT'; states: StreamDeviceState[] }
+  | { type: 'monitor_REQUEST_REFRESH'; uuid: string }
   | { type: 'CLOSE_SYSTEM_DUMP' }
 
 type DevicesInput = {
@@ -42,8 +62,55 @@ type DevicesInput = {
   initialCidr: string
 }
 
-// Actor output types (inferred from fromPromise return types)
 type SuggestCidrOutput = { suggestions: Array<{ cidr: string }>; default: string | null }
+
+const isObjectRecord = (v: unknown): v is Record<string, unknown> => Boolean(v && typeof v === 'object')
+
+const parseChannels = (v: unknown): LanToggleXChannel[] => {
+  if (!Array.isArray(v)) return []
+  const out: LanToggleXChannel[] = []
+  for (const item of v) {
+    const entry = isObjectRecord(item) ? item : null
+    const channel = Number(entry?.channel)
+    if (!Number.isInteger(channel) || channel < 0) continue
+    const onoff: 0 | 1 = Number(entry?.onoff) === 1 ? 1 : 0
+    out.push({ channel, onoff })
+  }
+  return out.sort((a, b) => a.channel - b.channel)
+}
+
+const parseStreamState = (raw: unknown): StreamDeviceState | null => {
+  const v = isObjectRecord(raw) ? raw : null
+  if (!v) return null
+
+  const uuid = String(v.uuid ?? '').trim()
+  const host = String(v.host ?? '')
+  const channel = Number(v.channel)
+  const onoff: 0 | 1 = Number(v.onoff) === 1 ? 1 : 0
+  const updatedAt = Number(v.updatedAt)
+
+  if (!uuid) return null
+  if (!Number.isInteger(channel) || channel < 0) return null
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null
+
+  return {
+    uuid,
+    host,
+    channel,
+    onoff,
+    channels: parseChannels(v.channels),
+    updatedAt,
+    stale: Boolean(v.stale),
+    source: typeof v.source === 'string' ? v.source : undefined,
+    error: typeof v.error === 'string' ? v.error : undefined,
+  }
+}
+
+const parseSnapshotStates = (raw: unknown): StreamDeviceState[] => {
+  const payload = isObjectRecord(raw) ? raw : null
+  const statesRaw = Array.isArray(payload?.states) ? payload.states : []
+  return statesRaw.map(parseStreamState).filter((v): v is StreamDeviceState => Boolean(v))
+}
 
 export const devicesMachine = setup({
   types: {
@@ -52,6 +119,87 @@ export const devicesMachine = setup({
     input: {} as DevicesInput,
   },
   actors: {
+    streamEvents: fromCallback(({ sendBack }) => {
+      const reconnectDelaysMs = [1000, 2000, 5000, 10_000, 30_000] as const
+      let retryIndex = 0
+      let source: EventSource | null = null
+      let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+      let closed = false
+      const parseMessage = (message: Event): unknown => {
+        try {
+          return JSON.parse((message as MessageEvent).data ?? 'null') as unknown
+        } catch {
+          return null
+        }
+      }
+
+      const closeSource = () => {
+        if (!source) return
+        source.onopen = null
+        source.onerror = null
+        source.close()
+        source = null
+      }
+
+      const scheduleReconnect = () => {
+        if (closed || reconnectTimer) return
+        const delay = reconnectDelaysMs[Math.min(retryIndex, reconnectDelaysMs.length - 1)]
+        retryIndex += 1
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          openStream()
+        }, delay)
+      }
+
+      const openStream = () => {
+        if (closed) return
+        closeSource()
+
+        const ev = new EventSource('/api/events/stream')
+        source = ev
+
+        ev.onopen = () => {
+          retryIndex = 0
+          sendBack({ type: 'monitor_STREAM_CONNECTED' })
+        }
+
+        ev.onerror = () => {
+          sendBack({ type: 'monitor_STREAM_DISCONNECTED' })
+          closeSource()
+          scheduleReconnect()
+        }
+
+        ev.addEventListener('snapshot', (message) => {
+          const payload = parseMessage(message)
+          sendBack({ type: 'monitor_SNAPSHOT', states: parseSnapshotStates(payload) })
+        })
+
+        ev.addEventListener('device_state', (message) => {
+          const payload = parseMessage(message)
+          const state = parseStreamState(payload)
+          if (!state) return
+          sendBack({ type: 'monitor_STATE_RECEIVED', state })
+        })
+
+        ev.addEventListener('device_stale', (message) => {
+          const payload = parseMessage(message)
+          const state = parseStreamState(payload)
+          if (!state) return
+          sendBack({ type: 'monitor_DEVICE_STALE', state })
+        })
+      }
+
+      openStream()
+
+      return () => {
+        closed = true
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+        closeSource()
+      }
+    }),
     refreshFromCloud: fromPromise(async () => {
       const [devicesRes, hostsRes] = await Promise.all([
         apiPost<{ count: number; list: MerossCloudDevice[] }>('/api/cloud/devices/refresh', {}),
@@ -77,15 +225,6 @@ export const devicesMachine = setup({
       })
       const hostsRes = await apiGet<{ hosts: HostsMap }>('/api/hosts')
       return { resolved: res, hosts: hostsRes.hosts }
-    }),
-    fetchDeviceState: fromPromise(async ({ input }: { input: { uuid: string } }) => {
-      const res = await apiPost<{
-        host: string
-        channel: number
-        onoff: 0 | 1
-        channels?: LanToggleXChannel[]
-      }>('/api/device/state', { uuid: input.uuid, channel: 0 })
-      return { uuid: input.uuid, state: res }
     }),
     toggleDevice: fromPromise(async ({ input }: { input: { uuid: string; onoff: 0 | 1 } }) => {
       await apiPost('/api/device/toggle', { uuid: input.uuid, channel: 0, onoff: input.onoff })
@@ -122,6 +261,15 @@ export const devicesMachine = setup({
         // ignore
       }
     },
+    persistCidrRemote: (_, params: { cidr: string }) => {
+      const cidr = params.cidr.trim()
+      if (!cidr) return
+      void apiPost('/api/network/cidr', { cidr }).catch(() => {})
+    },
+    requestDeviceRefresh: (_, params: { uuid: string }) => {
+      if (!params.uuid) return
+      void apiPost('/api/device/states', { uuids: [params.uuid], reason: 'manual' }).catch(() => {})
+    },
     setActiveDeviceUuid: assign({
       activeDeviceUuid: (_, params: { uuid: string }) => params.uuid,
     }),
@@ -150,6 +298,8 @@ export const devicesMachine = setup({
         onoff: params.onoff,
         channels,
         updatedAt: Date.now(),
+        stale: false,
+        source: 'optimistic',
       }
 
       return {
@@ -179,11 +329,34 @@ export const devicesMachine = setup({
         [params.uuid]: params.state,
       },
     })),
-    clearDeviceError: assign(({ context }, params: { uuid: string }) => {
+    setStreamDeviceState: assign(({ context }, params: { state: StreamDeviceState }) => ({
+      deviceStates: {
+        ...context.deviceStates,
+        [params.state.uuid]: {
+          host: params.state.host,
+          channel: params.state.channel,
+          onoff: params.state.onoff,
+          channels: params.state.channels,
+          updatedAt: params.state.updatedAt,
+          stale: params.state.stale,
+          source: params.state.source,
+          ...(params.state.error ? { error: params.state.error } : {}),
+        },
+      },
+    })),
+    mergeSnapshot: assign(({ context }, params: { states: StreamDeviceState[] }) => {
       const next = { ...context.deviceStates }
-      const nextDeviceState = next[params.uuid]
-      if (nextDeviceState && nextDeviceState.error) {
-        delete nextDeviceState.error
+      for (const state of params.states) {
+        next[state.uuid] = {
+          host: state.host,
+          channel: state.channel,
+          onoff: state.onoff,
+          channels: state.channels,
+          updatedAt: state.updatedAt,
+          stale: state.stale,
+          source: state.source,
+          ...(state.error ? { error: state.error } : {}),
+        }
       }
       return { deviceStates: next }
     }),
@@ -192,6 +365,7 @@ export const devicesMachine = setup({
         ...context.deviceStates,
         [params.uuid]: {
           ...(context.deviceStates[params.uuid] || { host: '', channel: 0, onoff: 0, updatedAt: 0 }),
+          stale: true,
           error: params.error,
         },
       },
@@ -218,9 +392,40 @@ export const devicesMachine = setup({
   }),
   on: {
     SET_CIDR: {
+      actions: [
+        {
+          type: 'setCidr',
+          params: ({ event }) => ({ cidr: event.cidr }),
+        },
+        { type: 'persistCidr' },
+        {
+          type: 'persistCidrRemote',
+          params: ({ event }) => ({ cidr: event.cidr }),
+        },
+      ],
+    },
+    monitor_REQUEST_REFRESH: {
       actions: {
-        type: 'setCidr',
-        params: ({ event }) => ({ cidr: event.cidr }),
+        type: 'requestDeviceRefresh',
+        params: ({ event }) => ({ uuid: event.uuid }),
+      },
+    },
+    monitor_SNAPSHOT: {
+      actions: {
+        type: 'mergeSnapshot',
+        params: ({ event }) => ({ states: event.states }),
+      },
+    },
+    monitor_STATE_RECEIVED: {
+      actions: {
+        type: 'setStreamDeviceState',
+        params: ({ event }) => ({ state: event.state }),
+      },
+    },
+    monitor_DEVICE_STALE: {
+      actions: {
+        type: 'setStreamDeviceState',
+        params: ({ event }) => ({ state: event.state }),
       },
     },
     CLOSE_SYSTEM_DUMP: {
@@ -280,7 +485,6 @@ export const devicesMachine = setup({
           },
         },
         discoveringHosts: {
-          entry: { type: 'persistCidr' },
           invoke: {
             src: 'discoverHosts',
             input: ({ context }) => ({ cidr: context.cidr }),
@@ -314,7 +518,12 @@ export const devicesMachine = setup({
               },
               { actions: [] },
             ],
-            device_REFRESH_STATE: { target: 'fetchingState' },
+            device_REFRESH_STATE: {
+              actions: {
+                type: 'requestDeviceRefresh',
+                params: ({ event }) => ({ uuid: event.uuid }),
+              },
+            },
             device_DIAGNOSTICS: [
               {
                 guard: {
@@ -386,7 +595,14 @@ export const devicesMachine = setup({
             },
             onDone: {
               target: 'idle',
-              actions: [{ type: 'clearToggleRollback' }, { type: 'clearActiveDeviceUuid' }],
+              actions: [
+                {
+                  type: 'requestDeviceRefresh',
+                  params: ({ event }) => ({ uuid: event.output.uuid }),
+                },
+                { type: 'clearToggleRollback' },
+                { type: 'clearActiveDeviceUuid' },
+              ],
             },
             onError: {
               target: 'idle',
@@ -400,58 +616,6 @@ export const devicesMachine = setup({
                   }),
                 },
                 { type: 'clearToggleRollback' },
-                { type: 'clearActiveDeviceUuid' },
-              ],
-            },
-          },
-        },
-        fetchingState: {
-          entry: {
-            type: 'setActiveDeviceUuid',
-            params: ({ event }) => {
-              assertEvent(event, 'device_REFRESH_STATE')
-              return { uuid: event.uuid }
-            },
-          },
-          invoke: {
-            src: 'fetchDeviceState',
-            input: ({ event }) => {
-              assertEvent(event, 'device_REFRESH_STATE')
-              return { uuid: event.uuid }
-            },
-            onDone: {
-              target: 'idle',
-              actions: [
-                {
-                  type: 'clearDeviceError',
-                  params: ({ event }) => ({ uuid: event.output.uuid }),
-                },
-                {
-                  type: 'setDeviceState',
-                  params: ({ event }) => ({
-                    uuid: event.output.uuid,
-                    state: {
-                      host: event.output.state.host,
-                      channel: event.output.state.channel,
-                      onoff: event.output.state.onoff,
-                      channels: event.output.state.channels,
-                      updatedAt: Date.now(),
-                    },
-                  }),
-                },
-                { type: 'clearActiveDeviceUuid' },
-              ],
-            },
-            onError: {
-              target: 'idle',
-              actions: [
-                {
-                  type: 'setDeviceError',
-                  params: ({ context, event }) => ({
-                    uuid: context.activeDeviceUuid ?? '',
-                    error: event.error instanceof Error ? event.error.message : String(event.error),
-                  }),
-                },
                 { type: 'clearActiveDeviceUuid' },
               ],
             },
@@ -491,6 +655,30 @@ export const devicesMachine = setup({
               target: 'idle',
               actions: [{ type: 'clearActiveDeviceUuid' }],
             },
+          },
+        },
+      },
+    },
+    monitor: {
+      initial: 'connecting',
+      invoke: {
+        src: 'streamEvents',
+      },
+      states: {
+        connecting: {
+          on: {
+            monitor_STREAM_CONNECTED: { target: 'live' },
+            monitor_STREAM_DISCONNECTED: { target: 'degraded' },
+          },
+        },
+        live: {
+          on: {
+            monitor_STREAM_DISCONNECTED: { target: 'degraded' },
+          },
+        },
+        degraded: {
+          on: {
+            monitor_STREAM_CONNECTED: { target: 'live' },
           },
         },
       },

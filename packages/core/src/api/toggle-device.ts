@@ -1,7 +1,8 @@
 import { setToggleX } from '../meross'
 import { apiErr, apiOk, parseJsonBody, requireLanHost, requireLanKey } from './shared'
+import type { StatePollerService } from './state-poller'
 
-export const createToggleDeviceHandler = () => ({
+export const createToggleDeviceHandler = (poller?: StatePollerService) => ({
   /**
    * Function: Set ToggleX on/off state for a device channel over LAN.
    * Input: POST JSON `{ uuid, channel?, onoff }` (`channel` defaults to `0`, `onoff` coerced to `0 | 1`).
@@ -19,6 +20,10 @@ export const createToggleDeviceHandler = () => ({
       const host = await requireLanHost(uuid)
       const key = await requireLanKey()
       const resp = await setToggleX<any>({ host, key, channel, onoff })
+      if (poller) {
+        poller.boostDevice(uuid)
+        void poller.pollNow({ uuids: [uuid], reason: 'manual' }).catch(() => {})
+      }
       return apiOk({ host, channel, onoff, resp })
     } catch (e) {
       return apiErr(e instanceof Error ? e.message : String(e), 'lan_error')
