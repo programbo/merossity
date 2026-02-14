@@ -1,105 +1,79 @@
 import { describe, expect, it } from 'bun:test'
 import { createActor, fromPromise, waitFor } from 'xstate'
+import type { CloudSummary } from '../lib/types'
 import { appMachine } from './appMachine'
 
-const STATUS_OK = {
-  env: { hasEmail: true, hasPassword: true, hasKey: false },
-  config: {
-    path: '/tmp/config.json',
-    hasCloudCreds: false,
-    hasDevices: false,
-    hasHosts: false,
-    updatedAt: {},
-  },
-} as any
+const CLOUD: CloudSummary = {
+  domain: 'iotx.meross.com',
+  userId: 'user-1',
+  userEmail: 'a@example.com',
+  key: 'k',
+  tokenRedacted: 't',
+}
+
+const checkCloudCredsActor = (cloud: CloudSummary | null) =>
+  fromPromise(async (): Promise<{ cloud: CloudSummary | null }> => ({ cloud }))
 
 describe('appMachine', () => {
-  it('boots into needsCloudKey when no cloud creds exist', async () => {
+  it('boots to auth when cloud creds are missing', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: fromPromise(async () => ({
-          status: STATUS_OK,
-          cloud: null,
-          devices: [],
-          hosts: {},
-        })) as any,
+        checkCloudCreds: checkCloudCredsActor(null),
       },
     })
 
     const actor = createActor(machine, { input: { initialCidr: '' } })
     actor.start()
 
-    await waitFor(actor, (s) => s.matches({ app: { gate: { needsCloudKey: 'editing' } } }))
+    await waitFor(actor, (s) => s.matches({ active: 'auth' }))
+    expect(actor.getSnapshot().context.cloud).toBeNull()
   })
 
-  it('requires a 6-digit TOTP before submitting', async () => {
+  it('boots to devices when cloud creds are present', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: fromPromise(async () => ({
-          status: STATUS_OK,
-          cloud: null,
-          devices: [],
-          hosts: {},
-        })) as any,
+        checkCloudCreds: checkCloudCredsActor(CLOUD),
       },
     })
 
     const actor = createActor(machine, { input: { initialCidr: '' } })
     actor.start()
-    await waitFor(actor, (s) => s.matches({ app: { gate: { needsCloudKey: 'editing' } } }))
 
-    actor.send({ type: 'CONNECT.SET_EMAIL', email: 'a@example.com' })
-    actor.send({ type: 'CONNECT.SET_PASSWORD', password: 'pw' })
-    actor.send({ type: 'CONNECT.SET_TOTP', totp: '12345' })
-    actor.send({ type: 'CONNECT.SUBMIT' })
-
-    // Still editing (guard blocks submit).
-    expect(actor.getSnapshot().matches({ app: { gate: { needsCloudKey: 'editing' } } })).toBe(true)
+    await waitFor(actor, (s) => s.matches({ active: 'devices' }))
+    expect(actor.getSnapshot().context.cloud?.key).toBe('k')
   })
 
-  it('after successful login, hydrates inventory then enters idle', async () => {
+  it('moves from auth to devices after auth_loginSuccess', async () => {
     const machine = appMachine.provide({
       actors: {
-        bootstrap: fromPromise(async () => ({
-          status: STATUS_OK,
-          cloud: null,
-          devices: [],
-          hosts: {},
-        })) as any,
-        loginFlow: fromPromise(async () => ({
-          status: STATUS_OK,
-          cloud: {
-            domain: 'iotx.meross.com',
-            userId: 'u',
-            userEmail: 'a@example.com',
-            key: 'k',
-            tokenRedacted: 't',
-          },
-          resCloud: {
-            domain: 'iotx.meross.com',
-            userId: 'u',
-            userEmail: 'a@example.com',
-            key: 'k',
-            tokenRedacted: 't',
-          },
-        })) as any,
-        refreshDevicesFromCloud: fromPromise(async () => ({ count: 0, list: [] })) as any,
-        cidrSuggest: fromPromise(async () => ({ suggestions: [], default: '192.168.0.0/24' })) as any,
-        discoverHosts: fromPromise(async () => ({ cidr: '192.168.0.0/24', count: 0, hosts: {}, hostsAll: {} })) as any,
+        checkCloudCreds: checkCloudCredsActor(null),
       },
     })
 
     const actor = createActor(machine, { input: { initialCidr: '' } })
     actor.start()
-    await waitFor(actor, (s) => s.matches({ app: { gate: { needsCloudKey: 'editing' } } }))
+    await waitFor(actor, (s) => s.matches({ active: 'auth' }))
 
-    actor.send({ type: 'CONNECT.SET_EMAIL', email: 'a@example.com' })
-    actor.send({ type: 'CONNECT.SET_PASSWORD', password: 'pw' })
-    actor.send({ type: 'CONNECT.SET_TOTP', totp: '123456' })
-    actor.send({ type: 'CONNECT.SUBMIT' })
+    actor.send({ type: 'auth_loginSuccess', cloud: CLOUD })
 
-    await waitFor(actor, (s) =>
-      s.matches({ app: { gate: { hasCloudKey: { inventory: 'idle', scan: 'idle', control: 'idle' } } } }),
-    )
+    await waitFor(actor, (s) => s.matches({ active: 'devices' }))
+    expect(actor.getSnapshot().context.cloud?.userEmail).toBe('a@example.com')
+  })
+
+  it('moves from devices to auth after auth_logout and clears cloud', async () => {
+    const machine = appMachine.provide({
+      actors: {
+        checkCloudCreds: checkCloudCredsActor(CLOUD),
+      },
+    })
+
+    const actor = createActor(machine, { input: { initialCidr: '' } })
+    actor.start()
+    await waitFor(actor, (s) => s.matches({ active: 'devices' }))
+
+    actor.send({ type: 'auth_logout' })
+
+    await waitFor(actor, (s) => s.matches({ active: 'auth' }))
+    expect(actor.getSnapshot().context.cloud).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useRef } from 'react'
 import { groupDevicesForControl } from '@merossity/core/meross/inventory'
 import { Heading } from 'react-aria-components'
 import './index.css'
@@ -9,7 +9,6 @@ import { Button } from './ui/rac/Button'
 import { Modal } from './ui/rac/Modal'
 import { Switch } from './ui/rac/Switch'
 import { TextField } from './ui/rac/TextField'
-import { useToast } from './ui/toast'
 
 const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
 
@@ -87,14 +86,21 @@ export function App() {
 function AppView() {
   const isBooting = useAppSelector((s) => s.matches('booting'))
   const isInActive = useAppSelector((s) => s.matches('active'))
-  const isAuthView = useAppSelector((s) => s.matches('active.auth'))
-  const isDevicesView = useAppSelector((s) => s.matches('active.devices'))
+  const isAuthView = useAppSelector((s) => s.matches({ active: 'auth' }))
+  const isDevicesView = useAppSelector((s) => s.matches({ active: 'devices' }))
 
   if (isBooting) return <BootView />
   return (
     <div className="lab-bg min-h-screen">
-      {isInActive && isAuthView && <KeyGateView />}
-      {isInActive && isDevicesView && <DevicesWrapper />}
+      {isInActive ? (
+        isAuthView ? (
+          <AuthProvider>
+            <KeyGateView />
+          </AuthProvider>
+        ) : isDevicesView ? (
+          <DevicesWrapper />
+        ) : null
+      ) : null}
     </div>
   )
 }
@@ -247,8 +253,11 @@ function InventoryViewInternal() {
   )
   const isRefreshing = useDevicesSelector((s) => s.matches({ inventory: 'refreshingCloud' }))
   const systemDump = useDevicesSelector((s) => s.context.systemDump)
+  const devicesActor = useDevicesActorRef()
+  const didAutoLoadRef = useRef(false)
+  const shouldScanAfterRefreshRef = useRef(false)
+  const sawRefreshStartRef = useRef(false)
 
-  const canLan = Boolean(cloud?.key)
   const reloadBusy = Boolean(isRefreshing || isScanning)
 
   const groups = useMemo(() => groupDevicesForControl(devices, hosts), [devices, hosts])
@@ -257,12 +266,36 @@ function InventoryViewInternal() {
     try {
       await navigator.clipboard.writeText(text)
       // Toast shown by machine
-    } catch (e) {
+    } catch {
       // Toast shown by machine
     }
   }
 
   const cloudHint = cloud ? `${cloud.userEmail} · ${cloud.domain}` : ''
+
+  const startReload = () => {
+    shouldScanAfterRefreshRef.current = true
+    devicesActor.send({ type: 'REFRESH' })
+  }
+
+  useEffect(() => {
+    if (didAutoLoadRef.current) return
+    didAutoLoadRef.current = true
+    shouldScanAfterRefreshRef.current = true
+    devicesActor.send({ type: 'REFRESH' })
+  }, [devicesActor])
+
+  useEffect(() => {
+    if (isRefreshing) {
+      sawRefreshStartRef.current = true
+      return
+    }
+    if (!shouldScanAfterRefreshRef.current) return
+    if (!sawRefreshStartRef.current) return
+    sawRefreshStartRef.current = false
+    shouldScanAfterRefreshRef.current = false
+    devicesActor.send({ type: 'SCAN' })
+  }, [isRefreshing, devicesActor])
 
   return (
     <div className="app-shell">
@@ -292,10 +325,7 @@ function InventoryViewInternal() {
                 tone="quiet"
                 className={`is-iconOnly reloadButton${reloadBusy ? 'is-busy' : ''}`}
                 aria-label="Reload devices (refresh + scan LAN)"
-                onPress={() => {
-                  useDevicesActorRef().send({ type: 'REFRESH' })
-                  useDevicesActorRef().send({ type: 'SCAN' })
-                }}
+                onPress={startReload}
                 isDisabled={reloadBusy}
                 icon={<RefreshIcon className={reloadBusy ? 'iconSpin' : undefined} />}
               />
@@ -318,7 +348,7 @@ function InventoryViewInternal() {
               <TextField
                 label="CIDR (optional)"
                 value={cidr}
-                onChange={(cidr) => useDevicesActorRef().send({ type: 'SET_CIDR', cidr })}
+                onChange={(cidr) => devicesActor.send({ type: 'SET_CIDR', cidr })}
                 placeholder="auto (recommended)"
                 hint="Leave blank to auto-suggest; set a CIDR to speed up scanning."
                 isDisabled={isScanning}
@@ -340,6 +370,8 @@ function InventoryViewInternal() {
                   hosts={hosts}
                   deviceStates={deviceStates}
                   uuids={new Set(groups.ready.map((d: any) => d.uuid))}
+                  emptyTitle="No devices ready yet."
+                  emptyCopy="Discovered, controllable devices will appear here."
                 />
                 <DeviceGroup
                   title="Inaccessible"
@@ -348,6 +380,8 @@ function InventoryViewInternal() {
                   hosts={hosts}
                   deviceStates={deviceStates}
                   uuids={new Set(groups.inaccessible.map((d: any) => d.uuid))}
+                  emptyTitle="No inaccessible devices."
+                  emptyCopy="If all devices are reachable, this section stays empty."
                 />
               </div>
             )}
@@ -357,7 +391,7 @@ function InventoryViewInternal() {
             isDismissable
             isOpen={Boolean(systemDump)}
             onOpenChange={(open) => {
-              if (!open) useDevicesActorRef().send({ type: 'CLOSE_SYSTEM_DUMP' })
+              if (!open) devicesActor.send({ type: 'CLOSE_SYSTEM_DUMP' })
             }}
           >
             {systemDump ? (
@@ -371,11 +405,7 @@ function InventoryViewInternal() {
                 </div>
                 <pre className="dump__pre">{JSON.stringify(systemDump.data, null, 2)}</pre>
                 <div className="dump__actions">
-                  <Button
-                    tone="ghost"
-                    slot="close"
-                    onPress={() => useDevicesActorRef().send({ type: 'CLOSE_SYSTEM_DUMP' })}
-                  >
+                  <Button tone="ghost" slot="close" onPress={() => devicesActor.send({ type: 'CLOSE_SYSTEM_DUMP' })}>
                     Close
                   </Button>
                 </div>
@@ -395,9 +425,22 @@ function DeviceGroup(props: {
   hosts: Record<string, any>
   deviceStates: Record<string, DeviceState>
   uuids: Set<string>
+  emptyTitle: string
+  emptyCopy: string
 }) {
-  const { title, count, devices, hosts, deviceStates, uuids } = props
-  const filtered = devices.filter((d) => uuids.has(String(d.uuid ?? '')))
+  const { title, count, devices, hosts, deviceStates, uuids, emptyTitle, emptyCopy } = props
+  const filtered = devices
+    .filter((d) => uuids.has(String(d.uuid ?? '')))
+    .toSorted((a, b) => {
+      const aName = String(a.devName ?? '')
+        .trim()
+        .toLowerCase()
+      const bName = String(b.devName ?? '')
+        .trim()
+        .toLowerCase()
+      if (aName !== bName) return aName.localeCompare(bName)
+      return String(a.uuid ?? '').localeCompare(String(b.uuid ?? ''))
+    })
 
   return (
     <section className="deviceGroup">
@@ -406,12 +449,19 @@ function DeviceGroup(props: {
         <div className="chip chip--muted">{count}</div>
       </header>
       <div className="deviceList">
-        {filtered.map((d) => {
-          const uuid = String(d.uuid ?? '')
-          return (
-            <DeviceRow key={uuid} device={d} hostEntry={hosts[uuid] as HostEntry} deviceState={deviceStates[uuid]} />
-          )
-        })}
+        {filtered.length === 0 ? (
+          <div className="emptyState">
+            <div className="emptyState__title">{emptyTitle}</div>
+            <div className="emptyState__copy">{emptyCopy}</div>
+          </div>
+        ) : (
+          filtered.map((d) => {
+            const uuid = String(d.uuid ?? '')
+            return (
+              <DeviceRow key={uuid} device={d} hostEntry={hosts[uuid] as HostEntry} deviceState={deviceStates[uuid]} />
+            )
+          })
+        )}
       </div>
     </section>
   )
@@ -420,9 +470,6 @@ function DeviceGroup(props: {
 function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: DeviceState | undefined }) {
   const devices = useDevicesActorRef()
   const uuid = String(props.device?.uuid ?? '')
-  const isResolving = useDevicesSelector(
-    (s) => s.matches({ operations: 'resolving' }) && s.context.activeDeviceUuid === uuid,
-  )
   const isToggling = useDevicesSelector(
     (s) => s.matches({ operations: 'toggling' }) && s.context.activeDeviceUuid === uuid,
   )
@@ -450,10 +497,8 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const macCloud = (d.macAddress as string | undefined) ?? (d.mac as string | undefined) ?? ''
   const macLan = props.hostEntry?.mac ? String(props.hostEntry.mac) : ''
   const mac = macCloud || macLan
-  const macForResolve = macCloud || macLan || ''
 
   const ready = Boolean(host)
-  const disableResolve = isResolving
 
   const l = props.deviceState
   const ch0 = l?.channels?.find((c) => c.channel === 0) ?? (l ? { channel: 0, onoff: l.onoff } : null)
@@ -465,7 +510,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
   const toggleDisabled = !ready || isToggling
 
   const lanDesc = !ready
-    ? 'Find IP to query'
+    ? 'ip unavailable'
     : l
       ? `state @ ${new Date(l.updatedAt).toLocaleTimeString()}`
       : 'state unknown'
@@ -490,21 +535,7 @@ function DeviceRow(props: { device: any; hostEntry: HostEntry; deviceState: Devi
 
         <div className="device__rowActions">
           {!ready ? (
-            <Button
-              tone="primary"
-              onPress={() =>
-                devices.send({
-                  type: 'device_RESOLVE',
-                  uuid,
-                  mac: macForResolve,
-                  title,
-                })
-              }
-              isDisabled={disableResolve}
-              isPending={isResolving}
-            >
-              Find IP
-            </Button>
+            <div className="chip chip--muted">IP unavailable</div>
           ) : togglable ? (
             <>
               <Switch

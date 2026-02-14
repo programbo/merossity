@@ -24,6 +24,7 @@ type DevicesContext = {
   deviceStates: Record<string, DeviceState>
   systemDump: SystemDump | null
   activeDeviceUuid: string | null
+  toggleRollback: { uuid: string; previous: DeviceState | null } | null
 }
 
 type DevicesEvent =
@@ -42,13 +43,7 @@ type DevicesInput = {
 }
 
 // Actor output types (inferred from fromPromise return types)
-type RefreshFromCloudOutput = { count: number; list: MerossCloudDevice[] }
 type SuggestCidrOutput = { suggestions: Array<{ cidr: string }>; default: string | null }
-type DiscoverHostsOutput = { cidr: string; count: number; hosts: HostsMap; hostsAll: HostsMap }
-type ResolveHostOutput = { resolved: { uuid: string; host: string; mac?: string }; hosts: HostsMap }
-type FetchDeviceStateOutput = { uuid: string; state: { host: string; channel: number; onoff: 0 | 1; channels?: LanToggleXChannel[] } }
-type ToggleDeviceOutput = { uuid: string; onoff: 0 | 1 }
-type FetchDiagnosticsOutput = { uuid: string; host: string; data: unknown }
 
 export const devicesMachine = setup({
   types: {
@@ -58,7 +53,11 @@ export const devicesMachine = setup({
   },
   actors: {
     refreshFromCloud: fromPromise(async () => {
-      return await apiPost<RefreshFromCloudOutput>('/api/cloud/devices/refresh', {})
+      const [devicesRes, hostsRes] = await Promise.all([
+        apiPost<{ count: number; list: MerossCloudDevice[] }>('/api/cloud/devices/refresh', {}),
+        apiGet<{ hosts: HostsMap }>('/api/hosts').catch(() => ({ hosts: {} })),
+      ])
+      return { ...devicesRes, hosts: hostsRes.hosts }
     }),
     suggestCidr: fromPromise(async () => {
       return await apiGet<SuggestCidrOutput>('/api/lan/cidr-suggest')
@@ -109,7 +108,7 @@ export const devicesMachine = setup({
     setCidr: assign({
       cidr: (_, params: { cidr: string }) => params.cidr,
     }),
-    setCidrIfEmpty: assign(({ context }, params: { default: string | null; currentCidr: string }) => {
+    setCidrIfEmpty: assign((_, params: { default: string | null; currentCidr: string }) => {
       const cidr = params.default ?? ''
       const cur = params.currentCidr.trim()
       if (cur) return {}
@@ -128,6 +127,51 @@ export const devicesMachine = setup({
     }),
     clearActiveDeviceUuid: assign({
       activeDeviceUuid: null,
+    }),
+    prepareOptimisticToggle: assign(({ context }, params: { uuid: string; onoff: 0 | 1 }) => {
+      const prevRaw = context.deviceStates[params.uuid]
+      const previous = prevRaw
+        ? {
+            ...prevRaw,
+            channels: prevRaw.channels ? [...prevRaw.channels] : undefined,
+          }
+        : null
+
+      const host = previous?.host || context.hosts[params.uuid]?.host || ''
+      const baseChannels = previous?.channels ? [...previous.channels] : []
+      const hasChannel0 = baseChannels.some((c) => c.channel === 0)
+      const channels = hasChannel0
+        ? baseChannels.map((c) => (c.channel === 0 ? { ...c, onoff: params.onoff } : c))
+        : [{ channel: 0, onoff: params.onoff }, ...baseChannels]
+
+      const nextState: DeviceState = {
+        host,
+        channel: previous?.channel ?? 0,
+        onoff: params.onoff,
+        channels,
+        updatedAt: Date.now(),
+      }
+
+      return {
+        toggleRollback: { uuid: params.uuid, previous },
+        deviceStates: {
+          ...context.deviceStates,
+          [params.uuid]: nextState,
+        },
+      }
+    }),
+    rollbackOptimisticToggle: assign(({ context }) => {
+      const rollback = context.toggleRollback
+      if (!rollback) return {}
+
+      const next = { ...context.deviceStates }
+      if (rollback.previous) next[rollback.uuid] = rollback.previous
+      else delete next[rollback.uuid]
+
+      return { deviceStates: next, toggleRollback: null }
+    }),
+    clearToggleRollback: assign({
+      toggleRollback: null,
     }),
     setDeviceState: assign(({ context }, params: { uuid: string; state: DeviceState }) => ({
       deviceStates: {
@@ -170,6 +214,7 @@ export const devicesMachine = setup({
     deviceStates: {},
     systemDump: null,
     activeDeviceUuid: null,
+    toggleRollback: null,
   }),
   on: {
     SET_CIDR: {
@@ -200,10 +245,16 @@ export const devicesMachine = setup({
             src: 'refreshFromCloud',
             onDone: {
               target: 'idle',
-              actions: {
-                type: 'setDevices',
-                params: ({ event }) => ({ list: event.output.list }),
-              },
+              actions: [
+                {
+                  type: 'setDevices',
+                  params: ({ event }) => ({ list: event.output.list }),
+                },
+                {
+                  type: 'setHosts',
+                  params: ({ event }) => ({ hosts: event.output.hosts }),
+                },
+              ],
             },
             onError: {
               target: 'idle',
@@ -237,7 +288,7 @@ export const devicesMachine = setup({
               target: 'idle',
               actions: {
                 type: 'setHosts',
-                params: ({ event }) => ({ hosts: event.output.hosts }),
+                params: ({ event }) => ({ hosts: event.output.hostsAll }),
               },
             },
             onError: {
@@ -311,13 +362,22 @@ export const devicesMachine = setup({
           },
         },
         toggling: {
-          entry: {
-            type: 'setActiveDeviceUuid',
-            params: ({ event }) => {
-              assertEvent(event, 'device_TOGGLE')
-              return { uuid: event.uuid }
+          entry: [
+            {
+              type: 'setActiveDeviceUuid',
+              params: ({ event }) => {
+                assertEvent(event, 'device_TOGGLE')
+                return { uuid: event.uuid }
+              },
             },
-          },
+            {
+              type: 'prepareOptimisticToggle',
+              params: ({ event }) => {
+                assertEvent(event, 'device_TOGGLE')
+                return { uuid: event.uuid, onoff: event.onoff }
+              },
+            },
+          ],
           invoke: {
             src: 'toggleDevice',
             input: ({ event }) => {
@@ -326,11 +386,12 @@ export const devicesMachine = setup({
             },
             onDone: {
               target: 'idle',
-              actions: [{ type: 'clearActiveDeviceUuid' }],
+              actions: [{ type: 'clearToggleRollback' }, { type: 'clearActiveDeviceUuid' }],
             },
             onError: {
               target: 'idle',
               actions: [
+                { type: 'rollbackOptimisticToggle' },
                 {
                   type: 'setDeviceError',
                   params: ({ context, event }) => ({
@@ -338,6 +399,7 @@ export const devicesMachine = setup({
                     error: event.error instanceof Error ? event.error.message : String(event.error),
                   }),
                 },
+                { type: 'clearToggleRollback' },
                 { type: 'clearActiveDeviceUuid' },
               ],
             },

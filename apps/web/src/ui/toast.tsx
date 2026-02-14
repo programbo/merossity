@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import type { ReactNode } from 'react'
 
 export type ToastData = {
   kind: 'ok' | 'err'

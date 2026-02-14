@@ -1,13 +1,6 @@
 import { assign, fromPromise, setup } from 'xstate'
-import { ApiError, apiGet, apiPost } from '../lib/api'
+import { apiGet, apiPost } from '../lib/api'
 import type { CloudSummary, StatusResponse } from '../lib/types'
-
-type ConnectState = {
-  useEnv: boolean
-  email: string
-  password: string
-  totp: string
-}
 
 type AuthContext = {
   useEnv: boolean
@@ -34,25 +27,25 @@ export const authMachine = setup({
   },
   actions: {
     setUseEnv: assign({
-      useEnv: ({ event }) => (event as { useEnv: boolean }).useEnv,
+      useEnv: (_, params: { useEnv: boolean }) => params.useEnv,
     }),
     setEmail: assign({
-      email: ({ event }) => (event as { email: string }).email,
+      email: (_, params: { email: string }) => params.email,
     }),
     setPassword: assign({
-      password: ({ event }) => (event as { password: string }).password,
+      password: (_, params: { password: string }) => params.password,
     }),
     setTotp: assign({
-      totp: ({ event }) => (event as { totp: string }).totp,
+      totp: (_, params: { totp: string }) => params.totp,
     }),
     setStatusAndCloud: assign({
-      status: ({ event }) => (event as { output: { status: StatusResponse; cloud?: CloudSummary } }).output.status,
-      cloud: ({ event }) => (event as { output: { cloud?: CloudSummary } }).output.cloud ?? null,
+      status: (_, params: { status: StatusResponse; cloud: CloudSummary | null }) => params.status,
+      cloud: (_, params: { status: StatusResponse; cloud: CloudSummary | null }) => params.cloud,
     }),
-    clearSensitive: assign(({ context }) => ({
+    clearSensitive: assign({
       password: '',
       totp: '',
-    })),
+    }),
   },
   guards: {
     canSubmit: ({ context }) => {
@@ -70,7 +63,7 @@ export const authMachine = setup({
   actors: {
     loginFlow: fromPromise(
       async ({ input }: { input: { useEnv: boolean; email: string; password: string; totp: string } }) => {
-        const body: any = {}
+        const body: { email?: string; password?: string; mfaCode: string } = { mfaCode: input.totp.trim() }
 
         if (!input.useEnv) {
           body.email = input.email.trim()
@@ -79,8 +72,6 @@ export const authMachine = setup({
           if (input.email.trim()) body.email = input.email.trim()
           if (input.password) body.password = input.password
         }
-
-        body.mfaCode = input.totp.trim()
 
         const res = await apiPost<{ cloud: CloudSummary }>('/api/cloud/login', body)
         const [status, cloud] = await Promise.all([
@@ -105,10 +96,10 @@ export const authMachine = setup({
     cloud: null,
   },
   on: {
-    SET_USE_ENV: { actions: { type: 'setUseEnv' } },
-    SET_EMAIL: { actions: { type: 'setEmail' } },
-    SET_PASSWORD: { actions: { type: 'setPassword' } },
-    SET_TOTP: { actions: { type: 'setTotp' } },
+    SET_USE_ENV: { actions: { type: 'setUseEnv', params: ({ event }) => ({ useEnv: event.useEnv }) } },
+    SET_EMAIL: { actions: { type: 'setEmail', params: ({ event }) => ({ email: event.email }) } },
+    SET_PASSWORD: { actions: { type: 'setPassword', params: ({ event }) => ({ password: event.password }) } },
+    SET_TOTP: { actions: { type: 'setTotp', params: ({ event }) => ({ totp: event.totp }) } },
   },
   states: {
     editing: {
@@ -128,7 +119,15 @@ export const authMachine = setup({
         }),
         onDone: {
           target: 'success',
-          actions: [{ type: 'setStatusAndCloud' }],
+          actions: [
+            {
+              type: 'setStatusAndCloud',
+              params: ({ event }) => ({
+                status: event.output.status,
+                cloud: event.output.cloud ?? event.output.resCloud ?? null,
+              }),
+            },
+          ],
         },
         onError: {
           target: 'editing',
