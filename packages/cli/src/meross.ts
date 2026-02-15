@@ -14,8 +14,10 @@ import {
   merossCloudLogin,
   listHostsInCidr,
   pingSweep,
+  getTimerX,
   resolveIpv4FromMac,
   saveMerossConfig,
+  setTimerX,
   setToggleX,
   type MerossCloudDump,
   type MerossCloudCredentials,
@@ -488,6 +490,77 @@ export const merossCommands = () => {
           throw new Error('Invalid "--format". Expected "json" or "pretty".')
         }
         const resp = await getSystemAll<any>({ host: flags.host, key, timeoutMs: flags.timeoutMs })
+        if (flags.format === 'json') {
+          console.log(JSON.stringify(resp))
+          return
+        }
+        console.log(JSON.stringify(resp, null, 2))
+      },
+    ),
+
+    defineCommand(
+      {
+        name: 'meross:timerx:get',
+        description: 'Fetch Appliance.Control.TimerX by id via LAN HTTP (/config)',
+        flags: {
+          host: { type: String, description: 'Device host (IPv4 or IPv4:port)', required: true },
+          id: { type: String, description: 'TimerX id', required: true },
+          key: { type: String, description: 'Meross key (or set MEROSS_KEY)', required: false },
+          dump: { type: String, description: 'Optional dump path to source the cloud key from' },
+          timeoutMs: { type: Number, description: 'HTTP timeout ms (default: 5000)', default: 5000 },
+          format: { type: String, description: 'Output format ("json" or "pretty")', default: 'pretty' },
+        },
+      },
+      async ({ flags }) => {
+        const dump = await loadDumpMaybe(flags.dump)
+        const key = pickKey(flags.key, dump)
+        if (!key) {
+          throw new Error('Missing Meross key. Pass "--key" or set MEROSS_KEY (or provide --dump with a cloud.key).')
+        }
+        if (flags.format !== 'json' && flags.format !== 'pretty') {
+          throw new Error('Invalid "--format". Expected "json" or "pretty".')
+        }
+        const resp = await getTimerX<any>({ host: flags.host, key, id: String(flags.id), timeoutMs: flags.timeoutMs })
+        if (flags.format === 'json') {
+          console.log(JSON.stringify(resp))
+          return
+        }
+        console.log(JSON.stringify(resp, null, 2))
+      },
+    ),
+
+    defineCommand(
+      {
+        name: 'meross:timerx:set',
+        description: 'SET Appliance.Control.TimerX with a full timer object via LAN HTTP (/config)',
+        flags: {
+          host: { type: String, description: 'Device host (IPv4 or IPv4:port)', required: true },
+          key: { type: String, description: 'Meross key (or set MEROSS_KEY)', required: false },
+          dump: { type: String, description: 'Optional dump path to source the cloud key from' },
+          timer: { type: String, description: 'JSON timer object (must include "id")', required: true },
+          timeoutMs: { type: Number, description: 'HTTP timeout ms (default: 5000)', default: 5000 },
+          format: { type: String, description: 'Output format ("json" or "pretty")', default: 'pretty' },
+        },
+      },
+      async ({ flags }) => {
+        const dump = await loadDumpMaybe(flags.dump)
+        const key = pickKey(flags.key, dump)
+        if (!key) {
+          throw new Error('Missing Meross key. Pass "--key" or set MEROSS_KEY (or provide --dump with a cloud.key).')
+        }
+        if (flags.format !== 'json' && flags.format !== 'pretty') {
+          throw new Error('Invalid "--format". Expected "json" or "pretty".')
+        }
+        let timer: any = null
+        try {
+          timer = JSON.parse(String(flags.timer))
+        } catch {
+          throw new Error('Invalid --timer JSON')
+        }
+        if (!timer || typeof timer !== 'object' || Array.isArray(timer) || !String(timer.id ?? '').trim()) {
+          throw new Error('Invalid --timer payload (expected an object with a non-empty "id")')
+        }
+        const resp = await setTimerX<any>({ host: flags.host, key, timer, timeoutMs: flags.timeoutMs })
         if (flags.format === 'json') {
           console.log(JSON.stringify(resp))
           return

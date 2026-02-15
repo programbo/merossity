@@ -5,12 +5,19 @@ import type { CloudSummary, MerossCloudDevice } from '../lib/types'
 export type HostsMap = Record<string, { host: string; updatedAt: string; mac?: string }>
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
+type LanLightChannel = { channel: number; onoff: 0 | 1; luminance?: number; temperature?: number; rgb?: number }
+type LanScheduleDigestEntry = { channel: number; id: string; count: number }
 
 type DeviceState = {
   host: string
+  kind?: string
   channel: number
   onoff: 0 | 1
   channels?: LanToggleXChannel[]
+  lights?: LanLightChannel[]
+  light?: LanLightChannel | null
+  timerxDigest?: LanScheduleDigestEntry[]
+  triggerxDigest?: LanScheduleDigestEntry[]
   updatedAt: number
   stale?: boolean
   source?: string
@@ -20,9 +27,14 @@ type DeviceState = {
 type StreamDeviceState = {
   uuid: string
   host: string
+  kind?: string
   channel: number
   onoff: 0 | 1
   channels?: LanToggleXChannel[]
+  lights?: LanLightChannel[]
+  light?: LanLightChannel | null
+  timerxDigest?: LanScheduleDigestEntry[]
+  triggerxDigest?: LanScheduleDigestEntry[]
   updatedAt: number
   stale: boolean
   source?: string
@@ -79,6 +91,61 @@ const parseChannels = (v: unknown): LanToggleXChannel[] => {
   return out.sort((a, b) => a.channel - b.channel)
 }
 
+const parseLights = (v: unknown): LanLightChannel[] => {
+  if (!Array.isArray(v)) return []
+  const out: LanLightChannel[] = []
+  for (const item of v) {
+    const entry = isObjectRecord(item) ? item : null
+    const channel = Number(entry?.channel)
+    if (!Number.isInteger(channel) || channel < 0) continue
+    const onoff: 0 | 1 = Number(entry?.onoff) === 1 ? 1 : 0
+    const luminance = Number.isFinite(Number(entry?.luminance)) ? Number(entry?.luminance) : undefined
+    const temperature = Number.isFinite(Number(entry?.temperature)) ? Number(entry?.temperature) : undefined
+    const rgb = Number.isFinite(Number(entry?.rgb)) ? Number(entry?.rgb) : undefined
+    out.push({
+      channel,
+      onoff,
+      ...(luminance !== undefined ? { luminance } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(rgb !== undefined ? { rgb } : {}),
+    })
+  }
+  return out.sort((a, b) => a.channel - b.channel)
+}
+
+const parseLight = (v: unknown): LanLightChannel | null => {
+  const entry = isObjectRecord(v) ? v : null
+  if (!entry) return null
+  const channel = Number(entry?.channel)
+  if (!Number.isInteger(channel) || channel < 0) return null
+  const onoff: 0 | 1 = Number(entry?.onoff) === 1 ? 1 : 0
+  const luminance = Number.isFinite(Number(entry?.luminance)) ? Number(entry?.luminance) : undefined
+  const temperature = Number.isFinite(Number(entry?.temperature)) ? Number(entry?.temperature) : undefined
+  const rgb = Number.isFinite(Number(entry?.rgb)) ? Number(entry?.rgb) : undefined
+  return {
+    channel,
+    onoff,
+    ...(luminance !== undefined ? { luminance } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(rgb !== undefined ? { rgb } : {}),
+  }
+}
+
+const parseScheduleDigest = (v: unknown): LanScheduleDigestEntry[] => {
+  if (!Array.isArray(v)) return []
+  const out: LanScheduleDigestEntry[] = []
+  for (const item of v) {
+    const entry = isObjectRecord(item) ? item : null
+    const channel = Number(entry?.channel)
+    const id = String(entry?.id ?? '').trim()
+    const count = Number(entry?.count)
+    if (!Number.isInteger(channel) || channel < 0) continue
+    if (!id) continue
+    out.push({ channel, id, count: Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0 })
+  }
+  return out.sort((a, b) => a.channel - b.channel || a.id.localeCompare(b.id))
+}
+
 const parseStreamState = (raw: unknown): StreamDeviceState | null => {
   const v = isObjectRecord(raw) ? raw : null
   if (!v) return null
@@ -96,9 +163,14 @@ const parseStreamState = (raw: unknown): StreamDeviceState | null => {
   return {
     uuid,
     host,
+    kind: typeof v.kind === 'string' ? v.kind : undefined,
     channel,
     onoff,
     channels: parseChannels(v.channels),
+    lights: parseLights(v.lights),
+    light: parseLight(v.light),
+    timerxDigest: parseScheduleDigest(v.timerxDigest),
+    triggerxDigest: parseScheduleDigest(v.triggerxDigest),
     updatedAt,
     stale: Boolean(v.stale),
     source: typeof v.source === 'string' ? v.source : undefined,
@@ -282,6 +354,8 @@ export const devicesMachine = setup({
         ? {
             ...prevRaw,
             channels: prevRaw.channels ? [...prevRaw.channels] : undefined,
+            lights: prevRaw.lights ? [...prevRaw.lights] : undefined,
+            light: prevRaw.light ? { ...prevRaw.light } : prevRaw.light,
           }
         : null
 
@@ -292,11 +366,27 @@ export const devicesMachine = setup({
         ? baseChannels.map((c) => (c.channel === 0 ? { ...c, onoff: params.onoff } : c))
         : [{ channel: 0, onoff: params.onoff }, ...baseChannels]
 
+      const baseLights = previous?.lights ? [...previous.lights] : []
+      const prevLight0 = previous?.light ?? baseLights.find((l) => l.channel === 0) ?? null
+      const hasLight0 = baseLights.some((l) => l.channel === 0)
+      const lights =
+        prevLight0 || baseLights.length
+          ? hasLight0
+            ? baseLights.map((l) => (l.channel === 0 ? { ...l, onoff: params.onoff } : l))
+            : [{ ...(prevLight0 ?? { channel: 0, onoff: previous?.onoff ?? 0 }), onoff: params.onoff }, ...baseLights]
+          : undefined
+      const light = lights ? (lights.find((l) => l.channel === 0) ?? null) : previous?.light ?? null
+
       const nextState: DeviceState = {
         host,
+        kind: previous?.kind,
         channel: previous?.channel ?? 0,
         onoff: params.onoff,
         channels,
+        ...(lights ? { lights } : {}),
+        ...(light ? { light } : { light: null }),
+        timerxDigest: previous?.timerxDigest,
+        triggerxDigest: previous?.triggerxDigest,
         updatedAt: Date.now(),
         stale: false,
         source: 'optimistic',
@@ -334,9 +424,14 @@ export const devicesMachine = setup({
         ...context.deviceStates,
         [params.state.uuid]: {
           host: params.state.host,
+          kind: params.state.kind,
           channel: params.state.channel,
           onoff: params.state.onoff,
           channels: params.state.channels,
+          lights: params.state.lights,
+          light: params.state.light,
+          timerxDigest: params.state.timerxDigest,
+          triggerxDigest: params.state.triggerxDigest,
           updatedAt: params.state.updatedAt,
           stale: params.state.stale,
           source: params.state.source,
@@ -349,9 +444,14 @@ export const devicesMachine = setup({
       for (const state of params.states) {
         next[state.uuid] = {
           host: state.host,
+          kind: state.kind,
           channel: state.channel,
           onoff: state.onoff,
           channels: state.channels,
+          lights: state.lights,
+          light: state.light,
+          timerxDigest: state.timerxDigest,
+          triggerxDigest: state.triggerxDigest,
           updatedAt: state.updatedAt,
           stale: state.stale,
           source: state.source,

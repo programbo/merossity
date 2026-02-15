@@ -1,12 +1,22 @@
 import { getSystemAll } from '../meross'
-import { apiErr, apiOk, extractLanToggleX, parseJsonBody, requireLanHost, requireLanKey } from './shared'
+import {
+  apiErr,
+  apiOk,
+  extractLanLight,
+  extractLanToggleX,
+  extractLanTimerXDigest,
+  extractLanTriggerXDigest,
+  parseJsonBody,
+  requireLanHost,
+  requireLanKey,
+} from './shared'
 import type { StatePollerService } from './state-poller'
 
 export const createGetDeviceStateHandler = (poller?: StatePollerService) => ({
   /**
-   * Function: Read current ToggleX on/off state for a device channel from LAN system digest.
+   * Function: Read current device state for a channel from LAN system digest.
    * Input: POST JSON `{ uuid, channel? }` (`channel` defaults to `0`).
-   * Output: `{ ok: true, data: { host, channel, onoff, channels } }`, or `{ ok: false, error }`.
+   * Output: `{ ok: true, data: { host, channel, onoff, channels, lights, light, kind } }`, or `{ ok: false, error }`.
    */
   async POST(req: Request) {
     const body = (await parseJsonBody(req)) ?? {}
@@ -22,9 +32,21 @@ export const createGetDeviceStateHandler = (poller?: StatePollerService) => ({
 
       const state = result.states.find((s) => s.uuid === uuid)
       if (!state) return apiErr('State unavailable', 'state_unavailable')
-      const match = state.channels.find((t) => t.channel === channel) ?? null
-      if (!match) return apiErr('ToggleX channel not found', 'state_unavailable')
-      return apiOk({ host: state.host, channel: match.channel, onoff: match.onoff, channels: state.channels })
+      const toggleMatch = state.channels.find((t) => t.channel === channel) ?? null
+      const lightMatch = state.lights.find((t) => t.channel === channel) ?? null
+      const match = lightMatch ?? toggleMatch ?? null
+      if (!match) return apiErr('Channel not found', 'state_unavailable')
+      return apiOk({
+        host: state.host,
+        kind: state.kind,
+        channel: match.channel,
+        onoff: match.onoff,
+        channels: state.channels,
+        lights: state.lights,
+        light: state.light,
+        timerxDigest: state.timerxDigest,
+        triggerxDigest: state.triggerxDigest,
+      })
     }
 
     try {
@@ -33,11 +55,29 @@ export const createGetDeviceStateHandler = (poller?: StatePollerService) => ({
       // Keep this a bit snappier than a full system dump fetch.
       const data = await getSystemAll<any>({ host, key, timeoutMs: 3000 })
       const togglex = extractLanToggleX(data)
-      const match = togglex?.find((t) => t.channel === channel) ?? null
-      if (!match) {
-        return apiErr('ToggleX state not found in Appliance.System.All digest', 'state_unavailable')
-      }
-      return apiOk({ host, channel: match.channel, onoff: match.onoff, channels: togglex })
+      const lights = extractLanLight(data) ?? []
+      const timerxDigest = extractLanTimerXDigest(data)
+      const triggerxDigest = extractLanTriggerXDigest(data)
+      const toggleMatch = togglex?.find((t) => t.channel === channel) ?? null
+      const lightMatch = lights.find((t) => t.channel === channel) ?? null
+      const match = lightMatch ?? toggleMatch ?? null
+      if (!match) return apiErr('State not found in Appliance.System.All digest', 'state_unavailable')
+
+      const light0 = lights.find((l) => l.channel === 0) ?? (lights.length ? lights[0]! : null)
+      const ch0 = togglex?.find((c) => c.channel === 0) ?? (togglex?.length ? togglex[0]! : null)
+      const kind = light0 && ch0 ? 'mixed' : light0 ? 'light' : 'togglex'
+
+      return apiOk({
+        host,
+        kind,
+        channel: match.channel,
+        onoff: match.onoff,
+        channels: togglex ?? [],
+        lights,
+        light: light0,
+        timerxDigest,
+        triggerxDigest,
+      })
     } catch (e) {
       return apiErr(e instanceof Error ? e.message : String(e), 'lan_error')
     }

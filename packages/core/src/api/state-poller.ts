@@ -1,5 +1,16 @@
 import { applySecurityHeaders } from './applySecurityHeaders'
-import { extractLanToggleX, nowIso, readConfig, requireLanKey, writeConfig } from './shared'
+import {
+  extractLanLight,
+  extractLanToggleX,
+  extractLanTimerXDigest,
+  extractLanTriggerXDigest,
+  nowIso,
+  readConfig,
+  requireLanKey,
+  writeConfig,
+  type LanLightState,
+  type LanScheduleDigestEntry,
+} from './shared'
 import { defaultSuggestedCidr, getSystemAll, normalizeMac, pingSweep, resolveHostByUuidScan, resolveIpv4FromMac } from '../meross'
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
@@ -7,9 +18,14 @@ type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
 export type DeviceStateDto = {
   uuid: string
   host: string
+  kind: 'togglex' | 'light' | 'mixed'
   channel: number
   onoff: 0 | 1
   channels: LanToggleXChannel[]
+  lights: LanLightState[]
+  light: LanLightState | null
+  timerxDigest: LanScheduleDigestEntry[]
+  triggerxDigest: LanScheduleDigestEntry[]
   updatedAt: number
   source: 'poller' | 'manual'
   stale: boolean
@@ -95,13 +111,48 @@ const sameChannels = (a: LanToggleXChannel[], b: LanToggleXChannel[]): boolean =
   return true
 }
 
+const sameScheduleDigest = (a: LanScheduleDigestEntry[], b: LanScheduleDigestEntry[]): boolean => {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]!
+    const right = b[i]!
+    if (left.channel !== right.channel) return false
+    if (left.id !== right.id) return false
+    if (left.count !== right.count) return false
+  }
+  return true
+}
+
 export const hasMaterialStateChange = (prev: DeviceStateDto | undefined, next: DeviceStateDto): boolean => {
   if (!prev) return true
   if (prev.host !== next.host) return true
+  if (prev.kind !== next.kind) return true
   if (prev.channel !== next.channel) return true
   if (prev.onoff !== next.onoff) return true
   if (prev.stale !== next.stale) return true
   if (!sameChannels(prev.channels, next.channels)) return true
+  if (!sameScheduleDigest(prev.timerxDigest, next.timerxDigest)) return true
+  if (!sameScheduleDigest(prev.triggerxDigest, next.triggerxDigest)) return true
+  if (prev.lights.length !== next.lights.length) return true
+  for (let i = 0; i < prev.lights.length; i++) {
+    const a = prev.lights[i]!
+    const b = next.lights[i]!
+    if (a.channel !== b.channel) return true
+    if (a.onoff !== b.onoff) return true
+    if ((a.luminance ?? null) !== (b.luminance ?? null)) return true
+    if ((a.temperature ?? null) !== (b.temperature ?? null)) return true
+    if ((a.rgb ?? null) !== (b.rgb ?? null)) return true
+  }
+  const prevLight = prev.light
+  const nextLight = next.light
+  if (Boolean(prevLight) !== Boolean(nextLight)) return true
+  if (prevLight && nextLight) {
+    if (prevLight.channel !== nextLight.channel) return true
+    if (prevLight.onoff !== nextLight.onoff) return true
+    if ((prevLight.luminance ?? null) !== (nextLight.luminance ?? null)) return true
+    if ((prevLight.temperature ?? null) !== (nextLight.temperature ?? null)) return true
+    if ((prevLight.rgb ?? null) !== (nextLight.rgb ?? null)) return true
+  }
   return false
 }
 
@@ -116,7 +167,9 @@ const pollCodeFromError = (message: string): string => {
   const m = message.toLowerCase()
   if (m.includes('missing meross key')) return 'missing_key'
   if (m.includes('no lan host known')) return 'host_unavailable'
-  if (m.includes('state unavailable') || m.includes('togglex state not found')) return 'state_unavailable'
+  if (m.includes('state unavailable') || m.includes('togglex state not found') || m.includes('device state not found')) {
+    return 'state_unavailable'
+  }
   return 'lan_error'
 }
 
@@ -354,17 +407,33 @@ class StatePollerServiceImpl {
           timeoutMs: timeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
         })
         const channels = normalizeChannels(extractLanToggleX(resp) ?? [])
-        if (!channels.length) {
-          throw new Error('ToggleX state not found in Appliance.System.All digest (state unavailable).')
+        const lights = extractLanLight(resp) ?? []
+        if (!channels.length && !lights.length) {
+          throw new Error('Device state not found in Appliance.System.All digest (state unavailable).')
         }
-        const ch0 = channels.find((c) => c.channel === 0) ?? channels[0]!
+
+        const light0 = lights.find((l) => l.channel === 0) ?? (lights.length ? lights[0]! : null)
+        const ch0 = channels.find((c) => c.channel === 0) ?? (channels.length ? channels[0]! : null)
+        const primary = light0 ?? ch0
+        if (!primary) {
+          throw new Error('Device state unavailable (no channels).')
+        }
+
+        const kind: DeviceStateDto['kind'] = light0 && ch0 ? 'mixed' : light0 ? 'light' : 'togglex'
         const prev = this.stateByUuid.get(uuid)
+        const timerxDigest = extractLanTimerXDigest(resp)
+        const triggerxDigest = extractLanTriggerXDigest(resp)
         const next: DeviceStateDto = {
           uuid,
           host: hostEntry.host,
-          channel: ch0.channel,
-          onoff: ch0.onoff,
+          kind,
+          channel: primary.channel,
+          onoff: primary.onoff,
           channels,
+          lights,
+          light: light0,
+          timerxDigest,
+          triggerxDigest,
           updatedAt: this.nextUpdatedAt(prev),
           source: reason,
           stale: false,
@@ -394,9 +463,14 @@ class StatePollerServiceImpl {
         const staleNext: DeviceStateDto = {
           uuid,
           host: prev?.host ?? this.knownHosts.get(uuid)?.host ?? '',
+          kind: prev?.kind ?? 'togglex',
           channel: prev?.channel ?? 0,
           onoff: prev?.onoff ?? 0,
           channels: prev?.channels ?? [],
+          lights: prev?.lights ?? [],
+          light: prev?.light ?? null,
+          timerxDigest: prev?.timerxDigest ?? [],
+          triggerxDigest: prev?.triggerxDigest ?? [],
           updatedAt: this.nextUpdatedAt(prev),
           source: reason,
           stale: true,

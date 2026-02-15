@@ -4,9 +4,14 @@ import { failureBackoffMs, hasMaterialStateChange, withJitterMs, type DeviceStat
 const makeState = (overrides: Partial<DeviceStateDto> = {}): DeviceStateDto => ({
   uuid: 'u1',
   host: '192.168.1.10',
+  kind: 'togglex',
   channel: 0,
   onoff: 1,
   channels: [{ channel: 0, onoff: 1 }],
+  lights: [],
+  light: null,
+  timerxDigest: [],
+  triggerxDigest: [],
   updatedAt: 1,
   source: 'poller',
   stale: false,
@@ -35,6 +40,8 @@ describe('api/state-poller helpers', () => {
     expect(hasMaterialStateChange(prev, makeState({ onoff: 0 }))).toBe(true)
     expect(hasMaterialStateChange(prev, makeState({ stale: true }))).toBe(true)
     expect(hasMaterialStateChange(prev, makeState({ channels: [{ channel: 0, onoff: 0 }] }))).toBe(true)
+    expect(hasMaterialStateChange(prev, makeState({ timerxDigest: [{ channel: 0, id: 'a', count: 1 }] }))).toBe(true)
+    expect(hasMaterialStateChange(prev, makeState({ kind: 'light' }))).toBe(true)
+    expect(hasMaterialStateChange(prev, makeState({ lights: [{ channel: 0, onoff: 1, luminance: 50 }], light: { channel: 0, onoff: 1, luminance: 50 }, kind: 'light' }))).toBe(true)
   })
 })
-
