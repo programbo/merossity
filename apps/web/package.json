@@ -16,6 +16,7 @@
     "@merossity/core": "workspace:*",
     "@xstate/react": "^6.0.0",
     "bun-plugin-tailwind": "^0.1.2",
+    "motion": "^12.34.0",
     "react": "^19",
     "react-aria-components": "^1.15.1",
     "react-dom": "^19",

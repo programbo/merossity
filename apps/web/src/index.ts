@@ -12,6 +12,8 @@ const distDir = path.resolve(srcDir, '..', 'dist')
 
 const srcIndex = Bun.file(new URL('./index.html', import.meta.url))
 const distIndex = Bun.file(path.join(distDir, 'index.html'))
+const distStampPath = path.join(distDir, '.devbuild-stamp')
+const distStamp = Bun.file(distStampPath)
 
 const ensureDevBuild = async () => {
   if (isProduction) return
@@ -58,10 +60,13 @@ const ensureDevBuild = async () => {
 
   const shouldBuild = async () => {
     if (always) return true
+    // Use a build-only stamp rather than dist/index.html mtime so tools like Prettier
+    // don't accidentally make the UI look "fresh" without actually rebuilding.
+    if (!(await distStamp.exists())) return true
     if (!(await distIndex.exists())) return true
 
     try {
-      const distStat = await stat(path.join(distDir, 'index.html'))
+      const distStat = await stat(distStampPath)
       const srcNewest = await newestMtimeMs(srcDir)
       return srcNewest > distStat.mtimeMs
     } catch {
@@ -86,6 +91,8 @@ const ensureDevBuild = async () => {
   if (!result.success) {
     // Best-effort: keep the server up so the UI can display API errors, even if the frontend build failed.
     console.warn(`⚠️ Dev build failed (${result.logs.length} logs). Serving source index.html fallback.`)
+  } else {
+    await Bun.write(distStampPath, `${new Date().toISOString()}\n`)
   }
 }
 

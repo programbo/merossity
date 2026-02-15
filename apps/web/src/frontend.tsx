@@ -6,10 +6,15 @@
  */
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { MotionProvider } from './ui/motion/MotionProvider'
 
 function start() {
   const root = createRoot(document.getElementById('root')!)
-  root.render(<App />)
+  root.render(
+    <MotionProvider>
+      <App />
+    </MotionProvider>,
+  )
 }
 
 if (document.readyState === 'loading') {
