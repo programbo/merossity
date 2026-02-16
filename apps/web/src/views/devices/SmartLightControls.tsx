@@ -3,6 +3,7 @@ import {
   ColorThumb,
   ColorWheel,
   ColorWheelTrack,
+  ColorSlider,
   Label,
   Slider,
   SliderOutput,
@@ -42,6 +43,24 @@ const rgbIntFromColor = (c: Color): number | null => {
   return Number.parseInt(m[1]!, 16)
 }
 
+const hexToRgb = (hex: string): [number, number, number] | null => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const raw = Number.parseInt(m[1]!, 16)
+  return [(raw >> 16) & 0xff, (raw >> 8) & 0xff, raw & 0xff]
+}
+
+const mixRgb = (a: readonly [number, number, number], b: readonly [number, number, number], t: number) => {
+  const p = clamp(t, 0, 1)
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * p),
+    Math.round(a[1] + (b[1] - a[1]) * p),
+    Math.round(a[2] + (b[2] - a[2]) * p),
+  ] as const
+}
+
+const rgbToCss = (rgb: readonly [number, number, number]) => `rgb(${rgb[0]} ${rgb[1]} ${rgb[2]})`
+
 function LightSlider(props: {
   label: string
   value: number
@@ -75,57 +94,69 @@ function LightSlider(props: {
         </SliderOutput>
       </div>
 
-      <SliderTrack className="group relative h-11 rounded-full border border-white/10 bg-black/20 px-3 shadow-[0_18px_50px_rgba(0,0,0,0.45)] outline-none">
-        {({ state, isDisabled }) => {
-          const pct = state.getThumbPercent(0) * 100
-          return (
-            <>
-              <div
-                className={cls('absolute inset-[7px] rounded-full', isDisabled ? 'opacity-50' : 'opacity-100')}
-                style={{
-                  background: trackBg,
-                  filter: 'saturate(1.25) contrast(1.1)',
-                }}
-              />
-              <div
-                className="absolute inset-[7px] rounded-full"
-                style={{
-                  background:
-                    'radial-gradient(120px 60px at 22% 18%, rgba(255,255,255,0.18), transparent 62%), radial-gradient(160px 70px at 86% 30%, rgba(255,255,255,0.10), transparent 68%)',
-                }}
-              />
-              <div
-                className="absolute inset-y-[7px] left-[7px] rounded-full"
-                style={{
-                  width: `calc(${pct}% - 7px)`,
-                  background: `linear-gradient(90deg, ${fillGlow}, transparent 78%)`,
-                  filter: 'blur(0.2px)',
-                }}
-              />
-
-              <SliderThumb
-                className={cls(
-                  'absolute top-1/2 h-7 w-7 -translate-y-1/2 rounded-full border border-white/20 bg-[rgba(8,10,14,0.78)] shadow-[0_16px_40px_rgba(0,0,0,0.55)] outline-none',
-                  'before:absolute before:inset-[4px] before:rounded-full before:border before:border-white/14',
-                  'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
-                )}
-                style={({ defaultStyle }) => ({
-                  ...defaultStyle,
-                  boxShadow: `0 0 0 1px rgba(0,0,0,0.55), 0 22px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset`,
-                })}
-              >
+      <div className="relative h-11 overflow-visible rounded-full border border-white/10 bg-black/20 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
+        <SliderTrack
+          className="group outline-none"
+          // react-aria's trackProps include inline `position: relative`; override it so the track has real dimensions.
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+        >
+          {({ state, isDisabled }) => {
+            const pct = state.getThumbPercent(0) * 100
+            const warm = [255, 160, 64] as const
+            const cool = [160, 236, 255] as const
+            const tint = hexToRgb(props.tintHex) ?? [255, 106, 0]
+            const thumbFill =
+              props.track === 'temperature' ? rgbToCss(mixRgb(warm, cool, state.getThumbPercent(0))) : rgbToCss(tint)
+            return (
+              <>
                 <div
-                  className="h-full w-full rounded-full"
+                  className={cls('absolute inset-[7px] rounded-full', isDisabled ? 'opacity-50' : 'opacity-100')}
                   style={{
-                    background:
-                      'radial-gradient(14px 14px at 35% 30%, rgba(255,255,255,0.28), transparent 55%), radial-gradient(18px 16px at 64% 75%, rgba(255,255,255,0.12), transparent 60%)',
+                    background: trackBg,
+                    filter: 'saturate(1.25) contrast(1.1)',
                   }}
                 />
-              </SliderThumb>
-            </>
-          )
-        }}
-      </SliderTrack>
+                <div
+                  className="absolute inset-[7px] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(120px 60px at 22% 18%, rgba(255,255,255,0.18), transparent 62%), radial-gradient(160px 70px at 86% 30%, rgba(255,255,255,0.10), transparent 68%)',
+                  }}
+                />
+                <div
+                  className="absolute top-[7px] bottom-[7px] left-[7px] rounded-full"
+                  style={{
+                    width: `max(0px, calc(${pct}% - 7px))`,
+                    background: `linear-gradient(90deg, ${fillGlow}, transparent 78%)`,
+                    filter: 'blur(0.2px)',
+                  }}
+                />
+
+                <SliderThumb
+                  className={cls(
+                    'absolute top-1/2 h-7 w-7 rounded-full border border-white/30 shadow-[0_16px_40px_rgba(0,0,0,0.55)] outline-none',
+                    'before:absolute before:inset-[4px] before:rounded-full before:border before:border-white/14',
+                    'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
+                  )}
+                  style={({ defaultStyle, isDisabled }) => ({
+                    ...defaultStyle,
+                    backgroundColor: isDisabled ? 'rgba(77,85,96,0.7)' : thumbFill,
+                    boxShadow: `0 0 0 1px rgba(0,0,0,0.55), 0 22px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset`,
+                  })}
+                >
+                  <div
+                    className="h-full w-full rounded-full"
+                    style={{
+                      background:
+                        'radial-gradient(14px 13px at 34% 28%, rgba(255,255,255,0.34), transparent 58%), radial-gradient(17px 17px at 70% 78%, rgba(255,255,255,0.12), transparent 62%), linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0.02) 58%, rgba(255,255,255,0.18))',
+                    }}
+                  />
+                </SliderThumb>
+              </>
+            )
+          }}
+        </SliderTrack>
+      </div>
     </Slider>
   )
 }
@@ -343,7 +374,7 @@ export function SmartLightControls(props: {
                       })}
                     />
                     <div
-                      className="pointer-events-none absolute top-1/2 left-1/2 h-[92px] w-[92px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/12 shadow-[0_20px_70px_rgba(0,0,0,0.55)]"
+                      className="pointer-events-none absolute top-1/2 left-1/2 size-23 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/12 shadow-[0_20px_70px_rgba(0,0,0,0.55)]"
                       style={{
                         background: `radial-gradient(48px 40px at 34% 28%, rgba(255,255,255,0.22), transparent 60%), ${rgbToHex(
                           rgbIntFromColor(draftColor) ?? deviceRgb,
@@ -354,7 +385,7 @@ export function SmartLightControls(props: {
                     <ColorThumb
                       className={cls(
                         'h-7 w-7 rounded-full border-2 border-white shadow-[0_18px_60px_rgba(0,0,0,0.62)] outline-none',
-                        'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
+                        'data-focus-visible:ring-2 data-focus-visible:ring-[color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
                       )}
                       style={({ defaultStyle, isDisabled }) => ({
                         ...defaultStyle,
@@ -708,7 +739,7 @@ export function SmartLightQuickStrip(props: {
                   />
                   <SliderThumb
                     className={cls(
-                      'absolute top-1/2 h-6 w-6 -translate-y-1/2 rounded-full border border-white/18 bg-[rgba(8,10,14,0.78)] shadow-[0_16px_40px_rgba(0,0,0,0.55)] outline-none',
+                      'absolute top-1/2 h-6 w-6 rounded-full border border-white/18 bg-[rgba(8,10,14,0.78)] shadow-[0_16px_40px_rgba(0,0,0,0.55)] outline-none',
                       'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
                     )}
                     style={({ defaultStyle }) => ({

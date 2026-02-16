@@ -447,12 +447,6 @@ export function DeviceCard(props: { uuid: string; device: MerossCloudDevice | nu
         ) : null}
       </header>
 
-      <div className="px-4 pb-4">
-        <Button tone="quiet" className="w-full" onPress={() => openManage('diagnostics')}>
-          Manage
-        </Button>
-      </div>
-
       <Modal
         isDismissable
         isOpen={manageOpen}
