@@ -81,10 +81,7 @@ function LightSlider(props: {
           return (
             <>
               <div
-                className={cls(
-                  'absolute inset-[7px] rounded-full',
-                  isDisabled ? 'opacity-50' : 'opacity-100',
-                )}
+                className={cls('absolute inset-[7px] rounded-full', isDisabled ? 'opacity-50' : 'opacity-100')}
                 style={{
                   background: trackBg,
                   filter: 'saturate(1.25) contrast(1.1)',
@@ -133,7 +130,11 @@ function LightSlider(props: {
   )
 }
 
-export function SmartLightControls(props: { uuid: string; state: DeviceStateLike | undefined; onRequestRefresh: () => void }) {
+export function SmartLightControls(props: {
+  uuid: string
+  state: DeviceStateLike | undefined
+  onRequestRefresh: () => void
+}) {
   const toast = useToast()
 
   const light0 =
@@ -203,13 +204,20 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
             'radial-gradient(700px 220px at 18% 18%, rgba(255,106,0,0.22), transparent 60%), radial-gradient(620px 240px at 90% 10%, rgba(45,212,191,0.16), transparent 58%), radial-gradient(500px 260px at 55% 120%, rgba(255,255,255,0.05), transparent 62%)',
         }}
       />
-      <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.7) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.7) 1px, transparent 1px)', backgroundSize: '18px 18px' }} />
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.06]"
+        style={{
+          backgroundImage:
+            'linear-gradient(rgba(255,255,255,0.7) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.7) 1px, transparent 1px)',
+          backgroundSize: '18px 18px',
+        }}
+      />
 
       <div className="relative grid gap-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[12px] tracking-[0.16em] text-white/60 uppercase">Light controls</div>
-            <div className="text-[13px] leading-tight font-[var(--font-display)] text-foreground/90">
+            <div className="text-foreground/90 text-[13px] leading-tight font-[var(--font-display)]">
               {props.state?.kind === 'mixed' ? 'Bulb + relay' : 'Smart bulb'}
             </div>
           </div>
@@ -240,11 +248,7 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
           tintHex={deviceHex}
         />
 
-        <Tabs
-          selectedKey={mode}
-          onSelectionChange={(k) => setMode(k === 'white' ? 'white' : 'color')}
-          className="mt-1"
-        >
+        <Tabs selectedKey={mode} onSelectionChange={(k) => setMode(k === 'white' ? 'white' : 'color')} className="mt-1">
           <TabList aria-label="Light mode" className="grid-cols-2">
             <Tab id="white">White</Tab>
             <Tab id="color">Color</Tab>
@@ -339,7 +343,7 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
                       })}
                     />
                     <div
-                      className="pointer-events-none absolute left-1/2 top-1/2 h-[92px] w-[92px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/12 shadow-[0_20px_70px_rgba(0,0,0,0.55)]"
+                      className="pointer-events-none absolute top-1/2 left-1/2 h-[92px] w-[92px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/12 shadow-[0_20px_70px_rgba(0,0,0,0.55)]"
                       style={{
                         background: `radial-gradient(48px 40px at 34% 28%, rgba(255,255,255,0.22), transparent 60%), ${rgbToHex(
                           rgbIntFromColor(draftColor) ?? deviceRgb,
@@ -364,7 +368,7 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
 
                 <div className="grid gap-2">
                   <div className="text-[11px] tracking-[0.16em] text-white/55 uppercase">Hue</div>
-                  <div className="text-[13px] leading-snug text-muted">
+                  <div className="text-muted text-[13px] leading-snug">
                     Spin the ring to pick a color. Brightness stays on the slider above.
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -381,7 +385,7 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
                         type="button"
                         className={cls(
                           'h-7 w-7 rounded-full border border-white/18 bg-black/20 shadow-[0_18px_60px_rgba(0,0,0,0.55)]',
-                          'outline-none transition-[transform,border-color] duration-150 ease-out',
+                          'transition-[transform,border-color] duration-150 ease-out outline-none',
                           'hover:scale-[1.03] hover:border-white/28',
                           'focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
                         )}
@@ -443,6 +447,144 @@ export function SmartLightControls(props: { uuid: string; state: DeviceStateLike
         ) : null}
       </div>
     </section>
+  )
+}
+
+export function SmartLightActionWidget(props: {
+  uuid: string
+  state: DeviceStateLike | undefined
+  onOpenTuning: () => void
+  onRequestRefresh: () => void
+}) {
+  const toast = useToast()
+
+  const light0 =
+    props.state?.light ??
+    props.state?.lights?.find((l) => l.channel === 0) ??
+    (props.state?.lights?.length ? props.state.lights[0]! : null)
+
+  const deviceLum = Number.isFinite(Number(light0?.luminance)) ? clamp(Number(light0?.luminance), 0, 100) : 50
+  const deviceRgb = Number.isFinite(Number(light0?.rgb)) ? clamp(Number(light0?.rgb), 0, 0xffffff) : 0xff6a00
+  const deviceHex = useMemo(() => rgbToHex(deviceRgb), [deviceRgb])
+
+  const [draftLum, setDraftLum] = useState(deviceLum)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setDraftLum(deviceLum)
+  }, [deviceLum])
+
+  const sendLight = async (patch: { luminance?: number }) => {
+    setBusy(true)
+    try {
+      await apiPost('/api/device/light', {
+        uuid: props.uuid,
+        channel: 0,
+        onoff: 1,
+        ...(patch.luminance !== undefined ? { luminance: clamp(Math.round(patch.luminance), 0, 100) } : {}),
+      })
+      props.onRequestRefresh()
+    } catch (e) {
+      toast.show({
+        kind: 'err',
+        title: 'Light update failed',
+        detail: e instanceof Error ? e.message : 'Unknown error.',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className={cls(
+        'relative overflow-hidden rounded-full border border-white/12 bg-[rgba(9,12,18,0.42)] px-2.5 py-2',
+        'shadow-[0_26px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl backdrop-saturate-150',
+      )}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 opacity-80"
+        style={{
+          background: `radial-gradient(420px 140px at 10% 0%, rgba(255,106,0,0.14), transparent 62%), radial-gradient(460px 150px at 100% 0%, rgba(45,212,191,0.10), transparent 60%)`,
+        }}
+      />
+      <div className="relative flex items-center gap-2">
+        <button
+          type="button"
+          className={cls(
+            'inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/14 bg-black/20 shadow-[0_18px_60px_rgba(0,0,0,0.55)]',
+            'transition-[transform,border-color,background] duration-150 ease-out outline-none',
+            'hover:scale-[1.02] hover:border-white/22 hover:bg-white/5',
+            'focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
+          )}
+          onClick={props.onOpenTuning}
+          disabled={busy}
+          aria-label="Open light tuning"
+        >
+          <span
+            className="h-5 w-5 rounded-full border border-white/18"
+            style={{ background: deviceHex }}
+            aria-hidden="true"
+          />
+        </button>
+
+        <Slider
+          value={clamp(Math.round(draftLum), 0, 100)}
+          onChange={(v) => setDraftLum(Number(v))}
+          onChangeEnd={(v) => {
+            const n = Number(v)
+            setDraftLum(n)
+            void sendLight({ luminance: n })
+          }}
+          minValue={0}
+          maxValue={100}
+          step={1}
+          isDisabled={busy}
+          aria-label="Brightness"
+          className="w-[min(180px,52vw)]"
+        >
+          <div className="relative h-9 rounded-full border border-white/10 bg-black/25">
+            <SliderTrack className="group relative mx-3 h-full outline-none">
+              {({ state, isDisabled }) => {
+                const pct = state.getThumbPercent(0) * 100
+                return (
+                  <>
+                    <div
+                      className={cls('absolute inset-[7px] rounded-full', isDisabled ? 'opacity-50' : 'opacity-100')}
+                      style={{
+                        background: `linear-gradient(90deg, rgba(255,255,255,0.10), ${deviceHex})`,
+                        filter: 'saturate(1.25) contrast(1.1)',
+                      }}
+                    />
+                    <div
+                      className="absolute inset-y-[7px] left-[7px] rounded-full"
+                      style={{
+                        width: `calc(${pct}% - 7px)`,
+                        background: 'linear-gradient(90deg, rgba(255,106,0,0.16), transparent 82%)',
+                      }}
+                    />
+                    <SliderThumb
+                      className={cls(
+                        'absolute top-1/2 h-6 w-6 rounded-full border border-white/18 bg-[rgba(8,10,14,0.78)] shadow-[0_16px_40px_rgba(0,0,0,0.55)] outline-none',
+                        'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_28%,transparent)]',
+                      )}
+                      style={({ defaultStyle }) => ({
+                        ...defaultStyle,
+                        boxShadow: `0 0 0 1px rgba(0,0,0,0.55), 0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.05) inset`,
+                      })}
+                    />
+                  </>
+                )
+              }}
+            </SliderTrack>
+          </div>
+        </Slider>
+
+        <div className="min-w-[3.25ch] pr-0.5 text-right text-[11px] tracking-[0.16em] text-white/60 tabular-nums">
+          {Math.round(draftLum)}%
+        </div>
+      </div>
+    </div>
   )
 }
 

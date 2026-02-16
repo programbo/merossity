@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { groupDevicesForControl } from '@merossity/core/meross/inventory'
-import { Heading } from 'react-aria-components'
 import type { MerossCloudDevice } from '../../lib/types'
 import { useDevicesActorRef, useDevicesSelector } from '../../state/devicesActor'
 import { cls } from '../../ui/cls'
 import { RefreshIcon } from '../../ui/icons/RefreshIcon'
 import { Button } from '../../ui/rac/Button'
-import { Modal } from '../../ui/rac/Modal'
-import { useToast } from '../../ui/toast'
 import { DeviceGroup } from './DeviceGroup'
-
-const clampText = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`)
 
 export function InventoryView() {
   const devices = useDevicesSelector((s) => s.context.devices)
@@ -20,9 +15,7 @@ export function InventoryView() {
   )
   const isRefreshing = useDevicesSelector((s) => s.matches({ inventory: 'refreshingCloud' }))
   const streamDegraded = useDevicesSelector((s) => s.matches({ monitor: 'degraded' }))
-  const systemDump = useDevicesSelector((s) => s.context.systemDump)
   const devicesActor = useDevicesActorRef()
-  const toast = useToast()
 
   const didAutoLoadRef = useRef(false)
   const shouldScanAfterRefreshRef = useRef(false)
@@ -44,37 +37,6 @@ export function InventoryView() {
   const groups = useMemo(() => groupDevicesForControl(devices, hosts), [devices, hosts])
   const readyUuids = useMemo(() => groups.ready.map((d) => d.uuid), [groups.ready])
   const inaccessibleUuids = useMemo(() => groups.inaccessible.map((d) => d.uuid), [groups.inaccessible])
-
-  const systemDumpText = useMemo(() => (systemDump ? JSON.stringify(systemDump.data, null, 2) : ''), [systemDump])
-
-  const copySystemDump = useCallback(async () => {
-    if (!systemDumpText) return
-
-    try {
-      if (navigator.clipboard?.writeText && window.isSecureContext) {
-        await navigator.clipboard.writeText(systemDumpText)
-      } else {
-        const ta = document.createElement('textarea')
-        ta.value = systemDumpText
-        ta.setAttribute('readonly', '')
-        ta.style.position = 'fixed'
-        ta.style.left = '-9999px'
-        ta.style.top = '0'
-        document.body.appendChild(ta)
-        ta.select()
-        document.execCommand('copy')
-        document.body.removeChild(ta)
-      }
-
-      toast.show({ kind: 'ok', title: 'Copied diagnostics JSON', detail: 'Ready to paste.' })
-    } catch (err) {
-      toast.show({
-        kind: 'err',
-        title: 'Copy failed',
-        detail: err instanceof Error ? err.message : 'Clipboard unavailable.',
-      })
-    }
-  }, [systemDumpText, toast])
 
   const startReload = () => {
     shouldScanAfterRefreshRef.current = true
@@ -172,37 +134,6 @@ export function InventoryView() {
               </div>
             )}
           </div>
-
-          <Modal
-            isDismissable
-            isOpen={Boolean(systemDump)}
-            onOpenChange={(open) => {
-              if (!open) devicesActor.send({ type: 'CLOSE_SYSTEM_DUMP' })
-            }}
-          >
-            {systemDump ? (
-              <div className="grid gap-3 p-4">
-                <Heading slot="title" className="m-0 text-[20px] leading-tight font-[var(--font-display)]">
-                  Diagnostics: Appliance.System.All
-                </Heading>
-                <div className="text-muted grid gap-1 text-[12px] tracking-[0.14em] uppercase">
-                  <div>{clampText(systemDump.uuid, 22)}</div>
-                  <div>{systemDump.host}</div>
-                </div>
-                <pre className="m-0 max-h-[54vh] overflow-auto rounded-[var(--radius-lg)] border border-white/15 bg-black/30 p-4 text-[12px] leading-relaxed text-white/90">
-                  {systemDumpText}
-                </pre>
-                <div className="flex flex-wrap justify-end gap-3">
-                  <Button tone="quiet" onPress={copySystemDump}>
-                    Copy JSON
-                  </Button>
-                  <Button tone="ghost" slot="close" onPress={() => devicesActor.send({ type: 'CLOSE_SYSTEM_DUMP' })}>
-                    Close
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </Modal>
         </section>
       </main>
     </div>

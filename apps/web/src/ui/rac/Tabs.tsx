@@ -20,7 +20,7 @@ export function TabList(props: React.ComponentProps<typeof RACTabList>) {
       {...props}
       className={composeRenderProps(props.className, (c) =>
         cls(
-          'grid w-full grid-flow-col auto-cols-fr gap-2 rounded-full border border-white/15 bg-[rgba(10,14,22,0.72)] p-2 shadow-[0_34px_90px_rgba(0,0,0,0.65)] backdrop-blur-xl backdrop-saturate-150',
+          'grid w-full auto-cols-fr grid-flow-col gap-2 rounded-full border border-white/15 bg-[rgba(10,14,22,0.72)] p-2 shadow-[0_34px_90px_rgba(0,0,0,0.65)] backdrop-blur-xl backdrop-saturate-150',
           c,
         ),
       )}

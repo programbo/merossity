@@ -24,6 +24,18 @@ type DeviceState = {
   error?: string
 }
 
+type DevicePower = {
+  uuid: string
+  host: string
+  channel: number
+  voltageV?: number
+  currentA?: number
+  powerW?: number
+  updatedAt: number
+  stale: boolean
+  error?: string
+}
+
 type StreamDeviceState = {
   uuid: string
   host: string
@@ -48,6 +60,7 @@ type DevicesContext = {
   hosts: HostsMap
   cidr: string
   deviceStates: Record<string, DeviceState>
+  devicePower: Record<string, DevicePower>
   systemDump: SystemDump | null
   activeDeviceUuid: string | null
   toggleRollback: { uuid: string; previous: DeviceState | null } | null
@@ -66,6 +79,8 @@ type DevicesEvent =
   | { type: 'monitor_STATE_RECEIVED'; state: StreamDeviceState }
   | { type: 'monitor_DEVICE_STALE'; state: StreamDeviceState }
   | { type: 'monitor_SNAPSHOT'; states: StreamDeviceState[] }
+  | { type: 'monitor_POWER_SNAPSHOT'; readings: DevicePower[] }
+  | { type: 'monitor_POWER_RECEIVED'; reading: DevicePower }
   | { type: 'monitor_REQUEST_REFRESH'; uuid: string }
   | { type: 'CLOSE_SYSTEM_DUMP' }
 
@@ -184,6 +199,41 @@ const parseSnapshotStates = (raw: unknown): StreamDeviceState[] => {
   return statesRaw.map(parseStreamState).filter((v): v is StreamDeviceState => Boolean(v))
 }
 
+const parsePower = (raw: unknown): DevicePower | null => {
+  const v = isObjectRecord(raw) ? raw : null
+  if (!v) return null
+
+  const uuid = String(v.uuid ?? '').trim()
+  const host = String(v.host ?? '')
+  const channel = Number(v.channel)
+  const updatedAt = Number(v.updatedAt)
+  if (!uuid) return null
+  if (!Number.isInteger(channel) || channel < 0) return null
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null
+
+  const voltageV = Number.isFinite(Number(v.voltageV)) ? Number(v.voltageV) : undefined
+  const currentA = Number.isFinite(Number(v.currentA)) ? Number(v.currentA) : undefined
+  const powerW = Number.isFinite(Number(v.powerW)) ? Number(v.powerW) : undefined
+
+  return {
+    uuid,
+    host,
+    channel,
+    ...(voltageV === undefined ? {} : { voltageV }),
+    ...(currentA === undefined ? {} : { currentA }),
+    ...(powerW === undefined ? {} : { powerW }),
+    updatedAt,
+    stale: Boolean(v.stale),
+    error: typeof v.error === 'string' ? v.error : undefined,
+  }
+}
+
+const parsePowerSnapshot = (raw: unknown): DevicePower[] => {
+  const payload = isObjectRecord(raw) ? raw : null
+  const readingsRaw = Array.isArray(payload?.readings) ? payload.readings : []
+  return readingsRaw.map(parsePower).filter((v): v is DevicePower => Boolean(v))
+}
+
 export const devicesMachine = setup({
   types: {
     context: {} as DevicesContext,
@@ -246,11 +296,23 @@ export const devicesMachine = setup({
           sendBack({ type: 'monitor_SNAPSHOT', states: parseSnapshotStates(payload) })
         })
 
+        ev.addEventListener('power_snapshot', (message) => {
+          const payload = parseMessage(message)
+          sendBack({ type: 'monitor_POWER_SNAPSHOT', readings: parsePowerSnapshot(payload) })
+        })
+
         ev.addEventListener('device_state', (message) => {
           const payload = parseMessage(message)
           const state = parseStreamState(payload)
           if (!state) return
           sendBack({ type: 'monitor_STATE_RECEIVED', state })
+        })
+
+        ev.addEventListener('device_power', (message) => {
+          const payload = parseMessage(message)
+          const reading = parsePower(payload)
+          if (!reading) return
+          sendBack({ type: 'monitor_POWER_RECEIVED', reading })
         })
 
         ev.addEventListener('device_stale', (message) => {
@@ -375,7 +437,7 @@ export const devicesMachine = setup({
             ? baseLights.map((l) => (l.channel === 0 ? { ...l, onoff: params.onoff } : l))
             : [{ ...(prevLight0 ?? { channel: 0, onoff: previous?.onoff ?? 0 }), onoff: params.onoff }, ...baseLights]
           : undefined
-      const light = lights ? (lights.find((l) => l.channel === 0) ?? null) : previous?.light ?? null
+      const light = lights ? (lights.find((l) => l.channel === 0) ?? null) : (previous?.light ?? null)
 
       const nextState: DeviceState = {
         host,
@@ -460,6 +522,19 @@ export const devicesMachine = setup({
       }
       return { deviceStates: next }
     }),
+    mergePowerSnapshot: assign(({ context }, params: { readings: DevicePower[] }) => {
+      const next = { ...context.devicePower }
+      for (const r of params.readings) {
+        next[r.uuid] = r
+      }
+      return { devicePower: next }
+    }),
+    setPowerReading: assign(({ context }, params: { reading: DevicePower }) => ({
+      devicePower: {
+        ...context.devicePower,
+        [params.reading.uuid]: params.reading,
+      },
+    })),
     setDeviceError: assign(({ context }, params: { uuid: string; error: string }) => ({
       deviceStates: {
         ...context.deviceStates,
@@ -486,6 +561,7 @@ export const devicesMachine = setup({
     hosts: {},
     cidr: input.initialCidr,
     deviceStates: {},
+    devicePower: {},
     systemDump: null,
     activeDeviceUuid: null,
     toggleRollback: null,
@@ -516,6 +592,12 @@ export const devicesMachine = setup({
         params: ({ event }) => ({ states: event.states }),
       },
     },
+    monitor_POWER_SNAPSHOT: {
+      actions: {
+        type: 'mergePowerSnapshot',
+        params: ({ event }) => ({ readings: event.readings }),
+      },
+    },
     monitor_STATE_RECEIVED: {
       actions: {
         type: 'setStreamDeviceState',
@@ -526,6 +608,12 @@ export const devicesMachine = setup({
       actions: {
         type: 'setStreamDeviceState',
         params: ({ event }) => ({ state: event.state }),
+      },
+    },
+    monitor_POWER_RECEIVED: {
+      actions: {
+        type: 'setPowerReading',
+        params: ({ event }) => ({ reading: event.reading }),
       },
     },
     CLOSE_SYSTEM_DUMP: {

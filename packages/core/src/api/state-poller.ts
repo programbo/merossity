@@ -1,5 +1,6 @@
 import { applySecurityHeaders } from './applySecurityHeaders'
 import {
+  extractLanElectricity,
   extractLanLight,
   extractLanToggleX,
   extractLanTimerXDigest,
@@ -11,7 +12,16 @@ import {
   type LanLightState,
   type LanScheduleDigestEntry,
 } from './shared'
-import { defaultSuggestedCidr, getSystemAll, normalizeMac, pingSweep, resolveHostByUuidScan, resolveIpv4FromMac } from '../meross'
+import {
+  defaultSuggestedCidr,
+  getElectricity,
+  getSystemAll,
+  normalizeMac,
+  pingSweep,
+  resolveHostByUuidScan,
+  resolveIpv4FromMac,
+} from '../meross'
+import { insertTelemetrySample } from './telemetry-db'
 
 type LanToggleXChannel = { channel: number; onoff: 0 | 1 }
 
@@ -32,6 +42,24 @@ export type DeviceStateDto = {
   error?: string
 }
 
+export type DevicePowerDto = {
+  uuid: string
+  host: string
+  channel: number
+  // Scaled units
+  voltageV?: number
+  currentA?: number
+  powerW?: number
+  // Raw units (optional)
+  voltageDv?: number
+  currentMa?: number
+  powerMw?: number
+  updatedAt: number
+  source: 'telemetry_poller' | 'telemetry_manual'
+  stale: boolean
+  error?: string
+}
+
 export type PollErrorDto = {
   uuid: string
   code: string
@@ -46,6 +74,9 @@ export type PollMeta = {
   lastChangeAt: number | null
   lastResolveAttemptAt: number | null
   boostUntilAt: number | null
+  telemetryNextDueAt: number
+  telemetryFailureCount: number
+  telemetryLastSuccessAt: number | null
 }
 
 export type PollerStats = {
@@ -78,6 +109,12 @@ const POLL_TICK_MS = 1000
 const STABLE_INTERVAL_MS = 45_000
 const HOT_INTERVAL_MS = 12_000
 const BOOST_INTERVAL_MS = 8_000
+const TELEMETRY_MAX_CONCURRENCY = 4
+const TELEMETRY_INTERVAL_MS = (() => {
+  const raw = Number(process.env.MEROSS_TELEMETRY_INTERVAL_MS)
+  if (!Number.isFinite(raw) || raw <= 0) return 10_000
+  return Math.max(2000, Math.round(raw))
+})()
 const HOT_WINDOW_MS = 2 * 60_000
 const BOOST_WINDOW_MS = 30_000
 const SYNC_HOSTS_EVERY_MS = 5_000
@@ -180,6 +217,9 @@ const createMeta = (now: number): PollMeta => ({
   lastChangeAt: null,
   lastResolveAttemptAt: null,
   boostUntilAt: null,
+  telemetryNextDueAt: now,
+  telemetryFailureCount: 0,
+  telemetryLastSuccessAt: null,
 })
 
 class StatePollerServiceImpl {
@@ -187,6 +227,8 @@ class StatePollerServiceImpl {
   private readonly metaByUuid = new Map<string, PollMeta>()
   private readonly knownHosts = new Map<string, KnownHost>()
   private readonly inFlight = new Map<string, Promise<PollResult>>()
+  private readonly powerByUuid = new Map<string, DevicePowerDto>()
+  private readonly telemetryInFlight = new Map<string, Promise<DevicePowerDto | null>>()
   private readonly resolving = new Set<string>()
   private readonly subscribers = new Map<number, Subscriber>()
   private readonly encoder = new TextEncoder()
@@ -240,6 +282,9 @@ class StatePollerServiceImpl {
 
         this.pushToSubscriber(id, 'snapshot', {
           states: [...this.stateByUuid.values()].sort((a, b) => a.uuid.localeCompare(b.uuid)),
+        })
+        this.pushToSubscriber(id, 'power_snapshot', {
+          readings: [...this.powerByUuid.values()].sort((a, b) => a.uuid.localeCompare(b.uuid)),
         })
         this.pushToSubscriber(id, 'poller_health', this.getStatus())
       },
@@ -344,10 +389,12 @@ class StatePollerServiceImpl {
 
       const now = Date.now()
       const due: string[] = []
+      const dueTelemetry: string[] = []
       for (const [uuid, meta] of this.metaByUuid) {
         if (!this.knownHosts.has(uuid)) continue
         if (this.inFlight.has(uuid)) continue
         if (meta.nextDueAt <= now) due.push(uuid)
+        if (!this.telemetryInFlight.has(uuid) && meta.telemetryNextDueAt <= now) dueTelemetry.push(uuid)
       }
 
       due.sort((a, b) => {
@@ -362,6 +409,19 @@ class StatePollerServiceImpl {
         const uuid = due.shift()
         if (!uuid) break
         void this.pollDevice(uuid, 'poller', undefined)
+      }
+
+      // Telemetry polling is independent from state polling.
+      dueTelemetry.sort((a, b) => {
+        const ma = this.metaByUuid.get(a)?.telemetryNextDueAt ?? 0
+        const mb = this.metaByUuid.get(b)?.telemetryNextDueAt ?? 0
+        return ma - mb
+      })
+
+      while (dueTelemetry.length && this.telemetryInFlight.size < TELEMETRY_MAX_CONCURRENCY) {
+        const uuid = dueTelemetry.shift()
+        if (!uuid) break
+        void this.pollTelemetry(uuid, 'telemetry_poller', undefined)
       }
     } finally {
       this.lastCycleAt = nowIso()
@@ -383,6 +443,150 @@ class StatePollerServiceImpl {
       if (!v?.host) continue
       this.knownHosts.set(uuid, { host: v.host, ...(v.mac ? { mac: v.mac } : {}) })
       this.ensureMeta(uuid, Date.now())
+    }
+  }
+
+  private nextTelemetryUpdatedAt(prev: DevicePowerDto | undefined): number {
+    const now = Date.now()
+    if (!prev) return now
+    return Math.max(now, prev.updatedAt + 1)
+  }
+
+  private async pollTelemetry(
+    uuid: string,
+    reason: DevicePowerDto['source'],
+    timeoutMs: number | undefined,
+  ): Promise<DevicePowerDto | null> {
+    const existing = this.telemetryInFlight.get(uuid)
+    if (existing) return await existing
+
+    const task = (async (): Promise<DevicePowerDto | null> => {
+      const now = Date.now()
+      const meta = this.ensureMeta(uuid, now)
+
+      const scheduleNext = () => {
+        // No jitter needed; telemetry is already on a short interval and independent per uuid.
+        const backoff = meta.telemetryFailureCount > 0 ? failureBackoffMs(meta.telemetryFailureCount) : 0
+        meta.telemetryNextDueAt = now + Math.max(TELEMETRY_INTERVAL_MS, backoff)
+      }
+
+      try {
+        const cfg = await readConfig()
+        const hostEntry = cfg.hosts?.[uuid]
+        if (!hostEntry?.host) throw new Error('No LAN host known for device uuid. Resolve host first.')
+
+        // Best-effort gating: only continuously poll electricity for plug/strip-like devices when we have cloud metadata.
+        // Otherwise, we still attempt (some users run LAN-only without cloud inventory).
+        const cloudModel = String(
+          (cfg.devices?.list as any[] | undefined)?.find((d) => String((d as any)?.uuid ?? '') === uuid)?.deviceType ??
+            '',
+        )
+          .trim()
+          .toUpperCase()
+        if (cloudModel && !(cloudModel.startsWith('MSS') || cloudModel.startsWith('MSP') || cloudModel.includes('MSS'))) {
+          meta.telemetryNextDueAt = now + Math.max(60_000, TELEMETRY_INTERVAL_MS)
+          return null
+        }
+
+        const key = await requireLanKey()
+        const resp = await getElectricity<any>({
+          host: hostEntry.host,
+          key,
+          channel: 0,
+          timeoutMs: timeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+        })
+
+        const parsed = extractLanElectricity(resp)
+        if (!parsed) throw new Error('Electricity data unavailable (namespace unsupported or empty payload).')
+
+        const prev = this.powerByUuid.get(uuid)
+        const next: DevicePowerDto = {
+          uuid,
+          host: hostEntry.host,
+          channel: parsed.channel,
+          ...(parsed.voltageV !== undefined ? { voltageV: parsed.voltageV } : {}),
+          ...(parsed.currentA !== undefined ? { currentA: parsed.currentA } : {}),
+          ...(parsed.powerW !== undefined ? { powerW: parsed.powerW } : {}),
+          ...(parsed.voltageDv !== undefined ? { voltageDv: parsed.voltageDv } : {}),
+          ...(parsed.currentMa !== undefined ? { currentMa: parsed.currentMa } : {}),
+          ...(parsed.powerMw !== undefined ? { powerMw: parsed.powerMw } : {}),
+          updatedAt: this.nextTelemetryUpdatedAt(prev),
+          source: reason,
+          stale: false,
+        }
+
+        // Always record samples when we have at least powerW (or raw power).
+        try {
+          insertTelemetrySample({
+            uuid,
+            channel: next.channel,
+            atMs: Date.now(),
+            voltageV: next.voltageV ?? null,
+            currentA: next.currentA ?? null,
+            powerW: next.powerW ?? null,
+            rawVoltageDv: next.voltageDv ?? null,
+            rawCurrentMa: next.currentMa ?? null,
+            rawPowerMw: next.powerMw ?? null,
+            source: next.source,
+          })
+        } catch {
+          // Best-effort; telemetry should not break control paths.
+        }
+
+        const changed =
+          !prev ||
+          prev.stale !== next.stale ||
+          (prev.powerW ?? null) !== (next.powerW ?? null) ||
+          (prev.voltageV ?? null) !== (next.voltageV ?? null) ||
+          (prev.currentA ?? null) !== (next.currentA ?? null)
+
+        this.powerByUuid.set(uuid, next)
+        if (changed) this.broadcast('device_power', next)
+
+        meta.telemetryFailureCount = 0
+        meta.telemetryLastSuccessAt = now
+        scheduleNext()
+        return next
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        meta.telemetryFailureCount += 1
+        scheduleNext()
+
+        const prev = this.powerByUuid.get(uuid)
+        const staleNext: DevicePowerDto = {
+          uuid,
+          host: prev?.host ?? this.knownHosts.get(uuid)?.host ?? '',
+          channel: prev?.channel ?? 0,
+          ...(prev?.voltageV !== undefined ? { voltageV: prev.voltageV } : {}),
+          ...(prev?.currentA !== undefined ? { currentA: prev.currentA } : {}),
+          ...(prev?.powerW !== undefined ? { powerW: prev.powerW } : {}),
+          ...(prev?.voltageDv !== undefined ? { voltageDv: prev.voltageDv } : {}),
+          ...(prev?.currentMa !== undefined ? { currentMa: prev.currentMa } : {}),
+          ...(prev?.powerMw !== undefined ? { powerMw: prev.powerMw } : {}),
+          updatedAt: this.nextTelemetryUpdatedAt(prev),
+          source: reason,
+          stale: true,
+          error: message,
+        }
+
+        const becameStale = Boolean(!prev || !prev.stale)
+        const changed =
+          !prev ||
+          prev.stale !== staleNext.stale ||
+          prev.error !== staleNext.error ||
+          (prev.powerW ?? null) !== (staleNext.powerW ?? null)
+        this.powerByUuid.set(uuid, staleNext)
+        if (changed) this.broadcast('device_power', staleNext)
+        if (becameStale) this.broadcast('device_power_stale', staleNext)
+        return null
+      }
+    })()
+
+    this.telemetryInFlight.set(uuid, task)
+    try {
+      return await task
+    } finally {
+      this.telemetryInFlight.delete(uuid)
     }
   }
 

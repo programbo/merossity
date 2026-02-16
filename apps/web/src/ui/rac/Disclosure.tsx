@@ -10,17 +10,14 @@ import {
 } from 'react-aria-components'
 import { cls } from '../cls'
 
-export type DisclosureProps = RACDisclosureProps & {
-  children: ReactNode
-}
+// Keep parity with react-aria-components: children may be a render function.
+export type DisclosureProps = RACDisclosureProps
 
 export function Disclosure(props: DisclosureProps) {
   return (
     <RACDisclosure
       {...props}
-      className={composeRenderProps(props.className, (className) =>
-        cls('rounded-[var(--radius-lg)] border border-white/15 bg-white/5', className),
-      )}
+      className={composeRenderProps(props.className, (className) => cls('rounded-[var(--radius-lg)]', className))}
     />
   )
 }
@@ -32,8 +29,8 @@ export function DisclosureTrigger(props: { children: ReactNode; className?: stri
         slot="trigger"
         className={composeRenderProps(props.className, (className) =>
           cls(
-            'flex w-full items-center justify-between gap-3 px-3 py-3 text-left text-[11px] tracking-[0.16em] text-white/75 uppercase outline-none',
-            'data-[hovered]:bg-white/5 data-[pressed]:translate-y-px data-[pressed]:bg-white/5',
+            'outline-none',
+            'data-[pressed]:translate-y-px',
             'data-[focus-visible]:ring-2 data-[focus-visible]:ring-[color:color-mix(in_srgb,var(--color-accent-2)_20%,transparent)]',
             className,
           ),

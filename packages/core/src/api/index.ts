@@ -1,6 +1,8 @@
 import { createDiscoverHostsHandler } from './discover-hosts'
 import { createGetCloudCredsHandler } from './get-cloud-creds'
 import { createGetCloudDevicesHandler } from './get-cloud-devices'
+import { createGetDeviceConsumptionXHandler } from './get-device-consumptionx'
+import { createGetDeviceElectricityHandler } from './get-device-electricity'
 import { createGetDeviceStateHandler } from './get-device-state'
 import { createGetDeviceStatesHandler } from './get-device-states'
 import { createGetDeviceSystemAllHandler } from './get-device-system-all'
@@ -12,6 +14,8 @@ import { createGetEventsStatusHandler } from './get-events-status'
 import { createGetEventsStreamHandler } from './get-events-stream'
 import { createGetHostsHandler } from './get-hosts'
 import { createGetStatusHandler } from './get-status'
+import { createGetTelemetryPowerCurrentHandler } from './get-telemetry-power-current'
+import { createGetTelemetryPowerHistoryHandler } from './get-telemetry-power-history'
 import { createLoginCloudHandler } from './login-cloud'
 import { createNetworkCidrHandler } from './network-cidr'
 import { createPatchDeviceTimerXHandler } from './patch-device-timerx'
@@ -40,6 +44,8 @@ export const createApiRoutes = (): ApiRoutes => {
   const discoverHosts = createDiscoverHostsHandler()
   const networkCidr = createNetworkCidrHandler()
   const getDeviceSystemAll = createGetDeviceSystemAllHandler()
+  const getDeviceElectricity = createGetDeviceElectricityHandler()
+  const getDeviceConsumptionX = createGetDeviceConsumptionXHandler()
   const getDeviceState = createGetDeviceStateHandler(statePoller)
   const getDeviceStates = createGetDeviceStatesHandler(statePoller)
   const toggleDevice = createToggleDeviceHandler(statePoller)
@@ -53,6 +59,8 @@ export const createApiRoutes = (): ApiRoutes => {
   const deleteDeviceTriggerX = createDeleteDeviceTriggerXHandler(statePoller)
   const eventsStream = createGetEventsStreamHandler(statePoller)
   const eventsStatus = createGetEventsStatusHandler(statePoller)
+  const telemetryPowerCurrent = createGetTelemetryPowerCurrentHandler()
+  const telemetryPowerHistory = createGetTelemetryPowerHistoryHandler()
 
   return {
     '/api/lan/cidr-suggest': suggestLanCidr,
@@ -68,6 +76,8 @@ export const createApiRoutes = (): ApiRoutes => {
     '/api/network/cidr': networkCidr,
 
     '/api/device/system-all': getDeviceSystemAll,
+    '/api/device/electricity': getDeviceElectricity,
+    '/api/device/consumptionx': getDeviceConsumptionX,
     '/api/device/state': getDeviceState,
     '/api/device/states': getDeviceStates,
     '/api/device/toggle': toggleDevice,
@@ -81,6 +91,9 @@ export const createApiRoutes = (): ApiRoutes => {
     '/api/device/triggerx/delete': deleteDeviceTriggerX,
     '/api/events/stream': eventsStream,
     '/api/events/status': eventsStatus,
+
+    '/api/telemetry/power/current': telemetryPowerCurrent,
+    '/api/telemetry/power/history': telemetryPowerHistory,
   }
 }
 

@@ -119,6 +119,75 @@ const coerceFiniteNumber = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
+export type LanElectricityState = {
+  channel: number
+  // Raw device units
+  voltageDv?: number
+  currentMa?: number
+  powerMw?: number
+  config?: { voltageRatio?: number; electricityRatio?: number }
+  // Scaled units
+  voltageV?: number
+  currentA?: number
+  powerW?: number
+}
+
+export const extractLanElectricity = (resp: any): LanElectricityState | null => {
+  const candidates = [
+    // Direct electricity response payload
+    resp?.payload?.electricity,
+    resp?.payload?.electricity?.electricity,
+    // Some firmwares include electricity in System.All digest
+    resp?.payload?.all?.digest?.electricity,
+    resp?.payload?.all?.digest?.electricity?.electricity,
+  ]
+
+  for (const c of candidates) {
+    const e = c && typeof c === 'object' ? c : null
+    if (!e) continue
+
+    const channel = coerceFiniteNumber((e as any).channel) ?? 0
+    if (!Number.isInteger(channel) || channel < 0) continue
+
+    const voltageDv = coerceFiniteNumber((e as any).voltage)
+    const currentMa = coerceFiniteNumber((e as any).current)
+    const powerMw = coerceFiniteNumber((e as any).power)
+    const configRaw = (e as any).config
+    const config =
+      configRaw && typeof configRaw === 'object'
+        ? {
+            ...(coerceFiniteNumber((configRaw as any).voltageRatio) !== null
+              ? { voltageRatio: Number((configRaw as any).voltageRatio) }
+              : {}),
+            ...(coerceFiniteNumber((configRaw as any).electricityRatio) !== null
+              ? { electricityRatio: Number((configRaw as any).electricityRatio) }
+              : {}),
+          }
+        : undefined
+
+    // Scale per common Meross units.
+    const voltageV = voltageDv === null ? undefined : voltageDv / 10
+    const currentA = currentMa === null ? undefined : currentMa / 1000
+    const powerW = powerMw === null ? undefined : powerMw / 1000
+
+    // If everything is missing, treat as unavailable.
+    if (voltageDv === null && currentMa === null && powerMw === null) continue
+
+    return {
+      channel,
+      ...(voltageDv === null ? {} : { voltageDv: Math.round(voltageDv) }),
+      ...(currentMa === null ? {} : { currentMa: Math.round(currentMa) }),
+      ...(powerMw === null ? {} : { powerMw: Math.round(powerMw) }),
+      ...(config && (config.voltageRatio !== undefined || config.electricityRatio !== undefined) ? { config } : {}),
+      ...(voltageV === undefined ? {} : { voltageV }),
+      ...(currentA === undefined ? {} : { currentA }),
+      ...(powerW === undefined ? {} : { powerW }),
+    }
+  }
+
+  return null
+}
+
 const coerceRgb = (v: unknown): number | null => {
   const n = coerceFiniteNumber(v)
   if (n !== null) return Math.round(n)
